@@ -58,7 +58,7 @@ def get_reply_keyboard(user_id=None):
     [
         KeyboardButton(
             text="💻 Веб-интерфейс", 
-            web_app=WebAppInfo(url="https://f0364461f4c0.ngrok-free.app")
+            web_app=WebAppInfo(url="https://readytoearn.vercel.apppython")
         )
     ]]
 

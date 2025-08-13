@@ -9,8 +9,8 @@ from datetime import datetime
 # Чтение переменных окружения
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-# Вставь сюда External Database URL из Render, если не используешь env
-DATABASE_URL = os.environ.get("DATABASE_URL") or "postgres://whitefoxbd_user:zz8hxBjEUeLknxYVEXVh8LdgwTSK4YEh@dpg-d2ecp43ipnbc739rhgs0-a.postgres.render.com:5432/whitefoxbd"
+# Актуальная ссылка на базу PostgreSQL (Render)
+DATABASE_URL = os.environ.get("DATABASE_URL") or "postgresql://whitefoxbd_user:zz8hxBjEUeLknxYVEXVh8LdgwTSK4YEh@dpg-d2ecp43ipnbc739rhgs0-a.oregon-postgres.render.com/whitefoxbd"
 
 # Безопасное получение ADMIN_ID
 admin_id_env = os.environ.get("ADMIN_ID")
@@ -155,7 +155,9 @@ if __name__ == "__main__":
     external_url = os.environ.get("RENDER_EXTERNAL_URL")
     if not external_url:
         raise RuntimeError("Ошибка: RENDER_EXTERNAL_URL не задан!")
+
     bot.remove_webhook()
     bot.set_webhook(url=f"https://{external_url}/{BOT_TOKEN}")
     print(f"Webhook установлен: https://{external_url}/{BOT_TOKEN}")
+
     app.run(host="0.0.0.0", port=port)

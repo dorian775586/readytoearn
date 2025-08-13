@@ -7,7 +7,20 @@ from datetime import datetime
 
 # Читаем токен и админа из переменных окружения
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-ADMIN_ID = int(os.environ.get("ADMIN_ID"))
+
+# -------------------------------
+# Безопасное получение ADMIN_ID
+admin_id_env = os.environ.get("ADMIN_ID")
+try:
+    ADMIN_ID = int(admin_id_env) if admin_id_env is not None else None
+except ValueError:
+    print(f"Ошибка: ADMIN_ID ('{admin_id_env}') не является числом")
+    ADMIN_ID = None
+
+if ADMIN_ID is None:
+    print("Предупреждение: ADMIN_ID не задан. Некоторые функции бота могут не работать.")
+# -------------------------------
+
 DATABASE_URL = os.environ.get("DATABASE_URL")  # PostgreSQL URL
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -74,7 +87,8 @@ def book(message):
             conn.commit()
 
         bot.send_message(user_id, f"Столик #{table_id} успешно забронирован на {time_slot}!")
-        bot.send_message(ADMIN_ID, f"Новая бронь:\nПользователь: {user_name}\nСтол: {table_id}\nВремя: {time_slot}")
+        if ADMIN_ID:
+            bot.send_message(ADMIN_ID, f"Новая бронь:\nПользователь: {user_name}\nСтол: {table_id}\nВремя: {time_slot}")
 
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка: {e}")
@@ -82,6 +96,10 @@ def book(message):
 # История бронирований (админ)
 @bot.message_handler(commands=["history"])
 def history(message):
+    if not ADMIN_ID:
+        bot.send_message(message.chat.id, "Функция истории бронирований недоступна. ADMIN_ID не задан.")
+        return
+
     if message.chat.id != ADMIN_ID:
         bot.send_message(message.chat.id, "У вас нет прав для этой команды.")
         return

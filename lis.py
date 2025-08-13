@@ -8,7 +8,9 @@ from datetime import datetime
 # -------------------------------
 # Чтение переменных окружения
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-DATABASE_URL = os.environ.get("DATABASE_URL")
+
+# Вставь сюда External Database URL из Render, если не используешь env
+DATABASE_URL = os.environ.get("DATABASE_URL") or "postgres://whitefoxbd_user:zz8hxBjEUeLknxYVEXVh8LdgwTSK4YEh@dpg-d2ecp43ipnbc739rhgs0-a.postgres.render.com:5432/whitefoxbd"
 
 # Безопасное получение ADMIN_ID
 admin_id_env = os.environ.get("ADMIN_ID")
@@ -18,7 +20,7 @@ except ValueError:
     print(f"Ошибка: ADMIN_ID ('{admin_id_env}') не является числом")
     ADMIN_ID = None
 
-# Проверка наличия критичных переменных
+# Проверка критичных переменных
 if not BOT_TOKEN:
     raise RuntimeError("Ошибка: BOT_TOKEN не задан!")
 if not DATABASE_URL:
@@ -71,22 +73,22 @@ def init_db():
 init_db()
 
 # -------------------------------
-# Команда старт
+# Команда /start
 @bot.message_handler(commands=["start"])
 def start(message):
     bot.send_message(message.chat.id, "Привет! Это бот для бронирования столиков.\nИспользуй /book для брони.")
 
-# Пример брони
+# Команда /book — пример брони
 @bot.message_handler(commands=["book"])
 def book(message):
     try:
         user_id = message.chat.id
         user_name = message.from_user.username or message.from_user.first_name
-        table_id = 1
-        time_slot = "19:00"
+        table_id = 1  # Пример, можно сделать выбор
+        time_slot = "19:00"  # Пример
         booked_at = datetime.now()
-        booking_for = "2 человека"
-        phone = "+79990000000"
+        booking_for = "2 человека"  # Пример
+        phone = "+79990000000"  # Пример
 
         with psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor) as conn:
             with conn.cursor() as cursor:
@@ -104,7 +106,7 @@ def book(message):
         bot.send_message(message.chat.id, f"Ошибка: {e}")
         print(f"Ошибка при бронировании: {e}")
 
-# История бронирований (админ)
+# Команда /history — история бронирований (только админ)
 @bot.message_handler(commands=["history"])
 def history(message):
     if not ADMIN_ID:

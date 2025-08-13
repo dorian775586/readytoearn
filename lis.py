@@ -5,10 +5,11 @@ from psycopg2.extras import RealDictCursor
 from flask import Flask, request
 from datetime import datetime
 
-# Читаем токен и админа из переменных окружения
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-
 # -------------------------------
+# Чтение переменных окружения
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
 # Безопасное получение ADMIN_ID
 admin_id_env = os.environ.get("ADMIN_ID")
 try:
@@ -17,50 +18,59 @@ except ValueError:
     print(f"Ошибка: ADMIN_ID ('{admin_id_env}') не является числом")
     ADMIN_ID = None
 
+# Проверка наличия критичных переменных
+if not BOT_TOKEN:
+    raise RuntimeError("Ошибка: BOT_TOKEN не задан!")
+if not DATABASE_URL:
+    raise RuntimeError("Ошибка: DATABASE_URL не задан!")
+
 if ADMIN_ID is None:
     print("Предупреждение: ADMIN_ID не задан. Некоторые функции бота могут не работать.")
+else:
+    print(f"ADMIN_ID: {ADMIN_ID}")
+
 # -------------------------------
-
-DATABASE_URL = os.environ.get("DATABASE_URL")  # PostgreSQL URL
-
 bot = telebot.TeleBot(BOT_TOKEN)
-
-# Flask сервер для webhook
 app = Flask(__name__)
 
 # Инициализация базы PostgreSQL
 def init_db():
-    with psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor) as conn:
-        with conn.cursor() as cursor:
-            # Таблица столиков
-            cursor.execute("""
-            CREATE TABLE IF NOT EXISTS tables (
-                id SERIAL PRIMARY KEY
-            )
-            """)
-            # Таблица бронирований
-            cursor.execute("""
-            CREATE TABLE IF NOT EXISTS bookings (
-                booking_id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                user_name TEXT NOT NULL,
-                table_id INT NOT NULL,
-                time_slot TEXT NOT NULL,
-                booked_at TIMESTAMP NOT NULL,
-                booking_for TEXT NOT NULL,
-                phone TEXT NOT NULL
-            )
-            """)
-            # Заполняем 10 столиков (id от 1 до 10)
-            cursor.execute("""
-            INSERT INTO tables (id)
-            SELECT generate_series(1, 10)
-            ON CONFLICT (id) DO NOTHING
-            """)
-        conn.commit()
+    try:
+        with psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor) as conn:
+            with conn.cursor() as cursor:
+                # Таблица столиков
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tables (
+                    id SERIAL PRIMARY KEY
+                )
+                """)
+                # Таблица бронирований
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS bookings (
+                    booking_id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    user_name TEXT NOT NULL,
+                    table_id INT NOT NULL,
+                    time_slot TEXT NOT NULL,
+                    booked_at TIMESTAMP NOT NULL,
+                    booking_for TEXT NOT NULL,
+                    phone TEXT NOT NULL
+                )
+                """)
+                # Заполняем 10 столиков (id от 1 до 10)
+                cursor.execute("""
+                INSERT INTO tables (id)
+                SELECT generate_series(1, 10)
+                ON CONFLICT (id) DO NOTHING
+                """)
+            conn.commit()
+        print("База данных успешно инициализирована")
+    except Exception as e:
+        print(f"Ошибка инициализации базы: {e}")
 
 init_db()
 
+# -------------------------------
 # Команда старт
 @bot.message_handler(commands=["start"])
 def start(message):
@@ -92,6 +102,7 @@ def book(message):
 
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка: {e}")
+        print(f"Ошибка при бронировании: {e}")
 
 # История бронирований (админ)
 @bot.message_handler(commands=["history"])
@@ -104,20 +115,25 @@ def history(message):
         bot.send_message(message.chat.id, "У вас нет прав для этой команды.")
         return
 
-    with psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("SELECT booking_id, user_name, table_id, time_slot, booked_at FROM bookings ORDER BY booked_at DESC")
-            rows = cursor.fetchall()
+    try:
+        with psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT booking_id, user_name, table_id, time_slot, booked_at FROM bookings ORDER BY booked_at DESC")
+                rows = cursor.fetchall()
 
-    if not rows:
-        bot.send_message(ADMIN_ID, "История пуста.")
-        return
+        if not rows:
+            bot.send_message(ADMIN_ID, "История пуста.")
+            return
 
-    text = "История бронирований:\n\n"
-    for row in rows:
-        text += f"#{row['booking_id']} — {row['user_name']}, стол {row['table_id']}, время {row['time_slot']}, дата {row['booked_at']}\n"
-    bot.send_message(ADMIN_ID, text)
+        text = "История бронирований:\n\n"
+        for row in rows:
+            text += f"#{row['booking_id']} — {row['user_name']}, стол {row['table_id']}, время {row['time_slot']}, дата {row['booked_at']}\n"
+        bot.send_message(ADMIN_ID, text)
+    except Exception as e:
+        bot.send_message(ADMIN_ID, f"Ошибка при получении истории: {e}")
+        print(f"Ошибка истории: {e}")
 
+# -------------------------------
 # Webhook для Telegram
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def webhook():
@@ -131,9 +147,13 @@ def webhook():
 def index():
     return "Бот работает!", 200
 
-# Запуск
+# -------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
+    external_url = os.environ.get("RENDER_EXTERNAL_URL")
+    if not external_url:
+        raise RuntimeError("Ошибка: RENDER_EXTERNAL_URL не задан!")
     bot.remove_webhook()
-    bot.set_webhook(url=f"https://{os.environ.get('RENDER_EXTERNAL_URL')}/{BOT_TOKEN}")
+    bot.set_webhook(url=f"https://{external_url}/{BOT_TOKEN}")
+    print(f"Webhook установлен: https://{external_url}/{BOT_TOKEN}")
     app.run(host="0.0.0.0", port=port)

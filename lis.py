@@ -9,10 +9,8 @@ from datetime import datetime
 # Чтение переменных окружения
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-# Актуальная ссылка на базу PostgreSQL (Render)
 DATABASE_URL = os.environ.get("DATABASE_URL") or "postgresql://whitefoxbd_user:zz8hxBjEUeLknxYVEXVh8LdgwTSK4YEh@dpg-d2ecp43ipnbc739rhgs0-a.oregon-postgres.render.com/whitefoxbd"
 
-# Безопасное получение ADMIN_ID
 admin_id_env = os.environ.get("ADMIN_ID")
 try:
     ADMIN_ID = int(admin_id_env) if admin_id_env is not None else None
@@ -20,7 +18,6 @@ except ValueError:
     print(f"Ошибка: ADMIN_ID ('{admin_id_env}') не является числом")
     ADMIN_ID = None
 
-# Проверка критичных переменных
 if not BOT_TOKEN or BOT_TOKEN.strip() == "":
     raise RuntimeError("Ошибка: BOT_TOKEN пуст или не задан! Установите его в Render → Environment.")
 if not DATABASE_URL:
@@ -40,13 +37,11 @@ def init_db():
     try:
         with psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor) as conn:
             with conn.cursor() as cursor:
-                # Таблица столиков
                 cursor.execute("""
                 CREATE TABLE IF NOT EXISTS tables (
                     id SERIAL PRIMARY KEY
                 )
                 """)
-                # Таблица бронирований
                 cursor.execute("""
                 CREATE TABLE IF NOT EXISTS bookings (
                     booking_id SERIAL PRIMARY KEY,
@@ -59,7 +54,6 @@ def init_db():
                     phone TEXT NOT NULL
                 )
                 """)
-                # Заполняем 10 столиков (id от 1 до 10)
                 cursor.execute("""
                 INSERT INTO tables (id)
                 SELECT generate_series(1, 10)
@@ -84,11 +78,11 @@ def book(message):
     try:
         user_id = message.chat.id
         user_name = message.from_user.username or message.from_user.first_name
-        table_id = 1  # Пример, можно сделать выбор
-        time_slot = "19:00"  # Пример
+        table_id = 1
+        time_slot = "19:00"
         booked_at = datetime.now()
-        booking_for = "2 человека"  # Пример
-        phone = "+79990000000"  # Пример
+        booking_for = "2 человека"
+        phone = "+79990000000"
 
         with psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor) as conn:
             with conn.cursor() as cursor:
@@ -157,14 +151,23 @@ if __name__ == "__main__":
     if not external_url or external_url.strip() == "":
         raise RuntimeError("Ошибка: RENDER_EXTERNAL_URL пуст или не задан! Установите его в Render → Environment.")
 
+    external_url = external_url.strip()
+    if not external_url.startswith("https://"):
+        raise RuntimeError("Ошибка: Telegram webhook требует HTTPS! Проверьте RENDER_EXTERNAL_URL.")
+
     # Устанавливаем webhook
     bot.remove_webhook()
-    webhook_url = f"https://{external_url}/{BOT_TOKEN}"
-    success = bot.set_webhook(url=webhook_url)
+    webhook_url = f"{external_url}/{BOT_TOKEN}"
+    try:
+        success = bot.set_webhook(url=webhook_url)
+        if success:
+            print("Webhook успешно установлен ✅")
+        else:
+            print("Webhook не установлен ❌")
+    except telebot.apihelper.ApiTelegramException as e:
+        print("Ошибка установки webhook:", e)
 
-    # Проверка результата
     info = bot.get_webhook_info()
-    print(f"Webhook установлен? {success}")
     print(f"Текущий webhook в Telegram: {info.url}")
 
     app.run(host="0.0.0.0", port=port)

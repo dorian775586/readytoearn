@@ -21,8 +21,8 @@ except ValueError:
     ADMIN_ID = None
 
 # Проверка критичных переменных
-if not BOT_TOKEN:
-    raise RuntimeError("Ошибка: BOT_TOKEN не задан!")
+if not BOT_TOKEN or BOT_TOKEN.strip() == "":
+    raise RuntimeError("Ошибка: BOT_TOKEN пуст или не задан! Установите его в Render → Environment.")
 if not DATABASE_URL:
     raise RuntimeError("Ошибка: DATABASE_URL не задан!")
 
@@ -153,11 +153,18 @@ def index():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     external_url = os.environ.get("RENDER_EXTERNAL_URL")
-    if not external_url:
-        raise RuntimeError("Ошибка: RENDER_EXTERNAL_URL не задан!")
 
+    if not external_url or external_url.strip() == "":
+        raise RuntimeError("Ошибка: RENDER_EXTERNAL_URL пуст или не задан! Установите его в Render → Environment.")
+
+    # Устанавливаем webhook
     bot.remove_webhook()
-    bot.set_webhook(url=f"https://{external_url}/{BOT_TOKEN}")
-    print(f"Webhook установлен: https://{external_url}/{BOT_TOKEN}")
+    webhook_url = f"https://{external_url}/{BOT_TOKEN}"
+    success = bot.set_webhook(url=webhook_url)
+
+    # Проверка результата
+    info = bot.get_webhook_info()
+    print(f"Webhook установлен? {success}")
+    print(f"Текущий webhook в Telegram: {info.url}")
 
     app.run(host="0.0.0.0", port=port)

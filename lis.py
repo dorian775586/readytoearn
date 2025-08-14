@@ -8,18 +8,17 @@ from datetime import datetime
 # -------------------------------
 # Чтение переменных окружения
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-
-DATABASE_URL = os.environ.get("DATABASE_URL") or "postgresql://whitefoxbd_user:zz8hxBjEUeLknxYVEXVh8LdgwTSK4YEh@dpg-d2ecp43ipnbc739rhgs0-a.oregon-postgres.render.com/whitefoxbd"
-
+DATABASE_URL = os.environ.get("DATABASE_URL")
 admin_id_env = os.environ.get("ADMIN_ID")
+
 try:
-    ADMIN_ID = int(admin_id_env) if admin_id_env is not None else None
+    ADMIN_ID = int(admin_id_env) if admin_id_env else None
 except ValueError:
     print(f"Ошибка: ADMIN_ID ('{admin_id_env}') не является числом")
     ADMIN_ID = None
 
-if not BOT_TOKEN or BOT_TOKEN.strip() == "":
-    raise RuntimeError("Ошибка: BOT_TOKEN пуст или не задан! Установите его в Render → Environment.")
+if not BOT_TOKEN:
+    raise RuntimeError("Ошибка: BOT_TOKEN пуст или не задан!")
 if not DATABASE_URL:
     raise RuntimeError("Ошибка: DATABASE_URL не задан!")
 
@@ -67,12 +66,11 @@ def init_db():
 init_db()
 
 # -------------------------------
-# Команда /start
+# Команды бота
 @bot.message_handler(commands=["start"])
 def start(message):
     bot.send_message(message.chat.id, "Привет! Это бот для бронирования столиков.\nИспользуй /book для брони.")
 
-# Команда /book — пример брони
 @bot.message_handler(commands=["book"])
 def book(message):
     try:
@@ -100,13 +98,11 @@ def book(message):
         bot.send_message(message.chat.id, f"Ошибка: {e}")
         print(f"Ошибка при бронировании: {e}")
 
-# Команда /history — история бронирований (только админ)
 @bot.message_handler(commands=["history"])
 def history(message):
     if not ADMIN_ID:
         bot.send_message(message.chat.id, "Функция истории бронирований недоступна. ADMIN_ID не задан.")
         return
-
     if message.chat.id != ADMIN_ID:
         bot.send_message(message.chat.id, "У вас нет прав для этой команды.")
         return
@@ -131,14 +127,15 @@ def history(message):
 
 # -------------------------------
 # Webhook для Telegram
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+@app.route("/webhook", methods=["POST"])
 def webhook():
-    json_str = request.get_data().decode("UTF-8")
-    update = telebot.types.Update.de_json(json_str)
-    bot.process_new_updates([update])
-    return "OK", 200
+    if request.headers.get("content-type") == "application/json":
+        update = telebot.types.Update.de_json(request.get_data().decode("utf-8"))
+        bot.process_new_updates([update])
+        return "OK", 200
+    return "Unsupported Media Type", 415
 
-# Главная страница
+# Главная страница для проверки
 @app.route("/")
 def index():
     return "Бот работает!", 200
@@ -148,26 +145,20 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     external_url = os.environ.get("RENDER_EXTERNAL_URL")
 
-    if not external_url or external_url.strip() == "":
-        raise RuntimeError("Ошибка: RENDER_EXTERNAL_URL пуст или не задан! Установите его в Render → Environment.")
+    if not external_url or not external_url.strip():
+        raise RuntimeError("Ошибка: RENDER_EXTERNAL_URL пуст или не задан!")
 
     external_url = external_url.strip()
     if not external_url.startswith("https://"):
-        raise RuntimeError("Ошибка: Telegram webhook требует HTTPS! Проверьте RENDER_EXTERNAL_URL.")
+        raise RuntimeError("Ошибка: Telegram webhook требует HTTPS!")
 
     # Устанавливаем webhook
     bot.remove_webhook()
-    webhook_url = f"{external_url}/{BOT_TOKEN}"
+    webhook_url = f"{external_url}/webhook"
     try:
-        success = bot.set_webhook(url=webhook_url)
-        if success:
-            print("Webhook успешно установлен ✅")
-        else:
-            print("Webhook не установлен ❌")
+        bot.set_webhook(url=webhook_url)
+        print(f"Webhook успешно установлен ✅ ({webhook_url})")
     except telebot.apihelper.ApiTelegramException as e:
         print("Ошибка установки webhook:", e)
-
-    info = bot.get_webhook_info()
-    print(f"Текущий webhook в Telegram: {info.url}")
 
     app.run(host="0.0.0.0", port=port)

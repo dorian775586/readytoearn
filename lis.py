@@ -1,73 +1,109 @@
 import os
-import logging
-import asyncio
 from datetime import datetime, timedelta
 
-from aiogram import Bot, Dispatcher, F, types
-from aiogram.enums import ParseMode, ContentType
-from aiogram.types import (
-    Message, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery,
-    ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
-)
-from aiogram.filters import CommandStart
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.client.bot import DefaultBotProperties
+import telebot
+from telebot import types
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from flask import Flask, request
 
-from aiohttp import web
-import asyncpg
-from dotenv import load_dotenv
+# =========================
+# ENV
+# =========================
+BOT_TOKEN = (os.environ.get("BOT_TOKEN") or "").strip()
+DATABASE_URL = (os.environ.get("DATABASE_URL") or "").strip()
+ADMIN_ID_ENV = (os.environ.get("ADMIN_ID") or "").strip()
+WEBAPP_URL = (os.environ.get("WEBAPP_URL") or "https://gitrepo-drab.vercel.app").strip()
 
-load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
-DATABASE_URL = os.getenv("DATABASE_URL")  # postgres://user:pass@host:port/dbname
+if not BOT_TOKEN:
+    raise RuntimeError("Ошибка: BOT_TOKEN пуст или не задан!")
+if not DATABASE_URL:
+    raise RuntimeError("Ошибка: DATABASE_URL не задан!")
 
-logging.basicConfig(level=logging.INFO)
-admin_ids = {ADMIN_ID}
+# Явно добавим порт, если вдруг в URL его нет
+if "render.com/" in DATABASE_URL and ":5432" not in DATABASE_URL:
+    # перед /dbname вставим :5432, если хоста без порта
+    # пример: ...render.com/whitefoxbd -> ...render.com:5432/whitefoxbd
+    DATABASE_URL = DATABASE_URL.replace(".render.com/", ".render.com:5432/")
 
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher()
+ADMIN_ID = None
+if ADMIN_ID_ENV:
+    try:
+        ADMIN_ID = int(ADMIN_ID_ENV)
+    except ValueError:
+        print(f"Предупреждение: ADMIN_ID ('{ADMIN_ID_ENV}') не является числом; админ-функции отключены.")
 
-class BookingStates(StatesGroup):
-    waiting_for_guest_count = State()
-    waiting_for_phone = State()
+# =========================
+# BOT & APP
+# =========================
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+app = Flask(__name__)
 
-# Подключение к БД
-db_pool: asyncpg.pool.Pool = None
+# =========================
+# DB INIT
+# =========================
+def db_connect():
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
-async def init_db():
-    global db_pool
-    db_pool = await asyncpg.create_pool(DATABASE_URL)
-    async with db_pool.acquire() as conn:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS bookings (
-                booking_id SERIAL PRIMARY KEY,
-                user_id BIGINT,
-                user_name TEXT,
-                phone TEXT,
-                table_id INT,
-                time_slot TEXT,
-                guests INT,
-                booked_at TIMESTAMP,
-                booking_for TIMESTAMP
-            );
-        """)
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS tables (
-                id INT PRIMARY KEY
-            );
-        """)
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS admins (
-                user_id BIGINT PRIMARY KEY
-            );
-        """)
-        # Пример столов
-        existing = await conn.fetchval("SELECT COUNT(*) FROM tables")
-        if existing == 0:
-            await conn.executemany("INSERT INTO tables (id) VALUES ($1)", [(1,), (2,), (3,), (4,), (5,), (6,)])
+def init_db():
+    try:
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                # Базовые таблицы
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS tables (
+                    id INT PRIMARY KEY
+                );
+                """)
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS bookings (
+                    booking_id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    user_name TEXT NOT NULL,
+                    table_id INT NOT NULL,
+                    time_slot TEXT NOT NULL,
+                    booked_at TIMESTAMP NOT NULL,
+                    booking_for TIMESTAMP,
+                    phone TEXT,
+                    guests INT
+                );
+                """)
+
+                # На случай старой схемы — добавим недостающие поля
+                cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS phone TEXT;")
+                cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS guests INT;")
+                cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_for TIMESTAMP;")
+
+                # Наполним столики (если пусто)
+                cur.execute("SELECT COUNT(*) AS c FROM tables;")
+                c = cur.fetchone()["c"]
+                if c == 0:
+                    cur.execute("INSERT INTO tables (id) SELECT generate_series(1, 10);")
+
+            conn.commit()
+        print("База данных: OK")
+    except Exception as e:
+        print(f"Ошибка инициализации базы: {e}")
+
+init_db()
+
+# =========================
+# HELPERS (UI)
+# =========================
+def main_reply_kb(user_id: int) -> types.ReplyKeyboardMarkup:
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    row1 = [
+        types.KeyboardButton("🦊 Забронировать"),
+        types.KeyboardButton("📋 Моя бронь"),
+    ]
+    row2 = [types.KeyboardButton("📖 Меню")]
+    row3 = [types.KeyboardButton("🌐 Веб-интерфейс", web_app=types.WebAppInfo(url=WEBAPP_URL))]
+    kb.row(*row1)
+    kb.row(*row2)
+    kb.row(*row3)
+    if ADMIN_ID and user_id == ADMIN_ID:
+        kb.row(types.KeyboardButton("🛠 Управление"), types.KeyboardButton("🗂 История"))
+    return kb
 
 def get_time_slots():
     slots = []
@@ -78,172 +114,314 @@ def get_time_slots():
         start += timedelta(minutes=30)
     return slots
 
-def get_reply_keyboard(user_id=None):
-    buttons = [[
-        KeyboardButton(text="📅 Забронировать"),
-        KeyboardButton(text="📝 Моя бронь")
-    ],
-    [
-        KeyboardButton(text="📖 Меню")
-    ],
-    [
-        KeyboardButton(
-            text="🌐 Веб-интерфейс", 
-            web_app=WebAppInfo(url="https://gitrepo-drab.vercel.app")
-        )
-    ]]
+def build_tables_inline():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    try:
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM tables ORDER BY id;")
+                rows = cur.fetchall()
+        buttons = [types.InlineKeyboardButton(text=f"🪑 Стол {r['id']}", callback_data=f"book_{r['id']}") for r in rows]
+        # разложим по 2 в ряд
+        for i in range(0, len(buttons), 2):
+            markup.row(*buttons[i:i+2])
+    except Exception as e:
+        print("Ошибка build_tables_inline:", e)
+    return markup
 
-    if user_id in admin_ids:
-        buttons.append([KeyboardButton(text="🛠 Управление"), KeyboardButton(text="📜 История")])
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+def build_time_inline(table_id: int):
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    busy = set()
+    try:
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT time_slot FROM bookings
+                    WHERE table_id=%s AND (booking_for IS NULL OR booking_for > NOW());
+                """, (table_id,))
+                rows = cur.fetchall()
+                busy = {r["time_slot"] for r in rows}
+    except Exception as e:
+        print("Ошибка build_time_inline:", e)
 
-async def get_table_keyboard():
-    builder = InlineKeyboardBuilder()
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT id FROM tables ORDER BY id")
-        for record in rows:
-            builder.button(text=f"🍽 Стол {record['id']}", callback_data=f"book_{record['id']}")
-    builder.adjust(2)
-    return builder.as_markup()
+    free_slots = [s for s in get_time_slots() if s not in busy]
+    buttons = [types.InlineKeyboardButton(text=s, callback_data=f"time_{table_id}_{s}") for s in free_slots]
+    # по 3 в ряд
+    for i in range(0, len(buttons), 3):
+        markup.row(*buttons[i:i+3])
+    return markup
 
-async def get_time_keyboard(table_id: int):
-    builder = InlineKeyboardBuilder()
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT time_slot FROM bookings 
-            WHERE table_id = $1 AND booking_for > NOW()
-        """, table_id)
-        busy_slots = {record['time_slot'] for record in rows}
+# Храним временные данные брони по юзеру (простая in-memory «FSM»)
+user_flow = {}  # user_id -> {"table_id": int, "time_slot": "HH:MM", "guests": int}
 
-    for slot in get_time_slots():
-        if slot not in busy_slots:
-            builder.button(text=slot, callback_data=f"time_{table_id}_{slot}")
-    builder.adjust(3)
-    return builder.as_markup()
-
-user_booking_data = {}
-
-@dp.message(CommandStart())
-async def cmd_start(message: Message):
-    await message.answer_photo(
+# =========================
+# COMMANDS
+# =========================
+@bot.message_handler(commands=["start"])
+def cmd_start(message: types.Message):
+    bot.send_photo(
+        message.chat.id,
         photo="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQbh6M8aJwxylo8aI1B-ceUHaiOyEnA425a0A&s",
-        caption="<b>Рестобар Белый Лис</b> приветствует вас!\nЗдесь вы можете дистанционно забронировать любой понравившийся столик!",
-        reply_markup=get_reply_keyboard(message.from_user.id)
+        caption="<b>Рестобар «Белый Лис»</b> приветствует вас!\nТут вы можете дистанционно забронировать любой понравившийся столик!",
+        reply_markup=main_reply_kb(message.from_user.id)
     )
 
-@dp.message(F.text == "📅 Забронировать")
-async def handle_book_button(message: Message, state: FSMContext):
-    user_id = message.from_user.id
-    async with db_pool.acquire() as conn:
-        existing = await conn.fetchrow("""
-            SELECT 1 FROM bookings WHERE user_id = $1 AND booking_for > NOW()
-        """, user_id)
-    if existing:
-        await message.answer("У вас уже есть активная бронь.", reply_markup=get_reply_keyboard(user_id))
+@bot.message_handler(commands=["history"])
+def cmd_history(message: types.Message):
+    if not ADMIN_ID or message.chat.id != ADMIN_ID:
+        bot.send_message(message.chat.id, "У вас нет прав для этой команды.")
         return
-    keyboard = await get_table_keyboard()
-    await message.answer("Выберите столик:", reply_markup=keyboard)
-    await state.set_state(BookingStates.waiting_for_guest_count)
+    try:
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT booking_id, user_name, table_id, time_slot, booked_at
+                    FROM bookings
+                    ORDER BY booked_at DESC
+                    LIMIT 50;
+                """)
+                rows = cur.fetchall()
+        if not rows:
+            bot.send_message(message.chat.id, "История пуста.")
+            return
+        text = "<b>История бронирований (последние 50):</b>\n\n"
+        for r in rows:
+            text += f"#{r['booking_id']} — {r['user_name']}, стол {r['table_id']}, {r['time_slot']}, {r['booked_at']}\n"
+        bot.send_message(message.chat.id, text)
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Ошибка истории: {e}")
 
-@dp.callback_query(F.data.startswith("book_"))
-async def handle_table_selection(callback: CallbackQuery, state: FSMContext):
-    table_id = int(callback.data.split("_")[1])
-    user_booking_data[callback.from_user.id] = {"table_id": table_id}
-    await callback.message.edit_text(f"Стол {table_id} выбран. Выберите время:", reply_markup=await get_time_keyboard(table_id))
-    await state.set_state(BookingStates.waiting_for_guest_count)
+# =========================
+# TEXT BUTTONS
+# =========================
+@bot.message_handler(func=lambda m: m.text == "🦊 Забронировать")
+def on_book_btn(message: types.Message):
+    # Проверим активную бронь
+    try:
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT 1 FROM bookings
+                    WHERE user_id=%s AND (booking_for IS NULL OR booking_for > NOW())
+                    LIMIT 1;
+                """, (message.from_user.id,))
+                row = cur.fetchone()
+        if row:
+            bot.send_message(message.chat.id, "У вас уже есть активная бронь.", reply_markup=main_reply_kb(message.from_user.id))
+            return
+    except Exception as e:
+        print("Ошибка проверки активной брони:", e)
 
-@dp.callback_query(F.data.startswith("time_"))
-async def handle_time_selection(callback: CallbackQuery, state: FSMContext):
-    _, table_id, slot = callback.data.split("_")
-    user_data = user_booking_data.get(callback.from_user.id, {})
-    user_data.update({"time_slot": slot})
-    user_booking_data[callback.from_user.id] = user_data
+    bot.send_message(message.chat.id, "Выберите столик:", reply_markup=build_tables_inline())
 
-    await callback.message.edit_text(f"Вы выбрали стол {table_id} на {slot}. Сколько будет гостей?")
-    await state.set_state(BookingStates.waiting_for_guest_count)
+@bot.message_handler(func=lambda m: m.text == "📋 Моя бронь")
+def on_my_booking(message: types.Message):
+    try:
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT booking_id, table_id, time_slot
+                    FROM bookings
+                    WHERE user_id=%s AND (booking_for IS NULL OR booking_for > NOW())
+                    ORDER BY booked_at DESC
+                    LIMIT 1;
+                """, (message.from_user.id,))
+                row = cur.fetchone()
+        if not row:
+            bot.send_message(message.chat.id, "У вас нет активной брони.", reply_markup=main_reply_kb(message.from_user.id))
+            return
 
-@dp.message(BookingStates.waiting_for_guest_count)
-async def handle_guest_count(message: Message, state: FSMContext):
-    guests = message.text.strip()
-    if not guests.isdigit() or int(guests) < 1:
-        await message.answer("Пожалуйста, введите корректное количество гостей.")
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton(text="❌ Отменить бронь", callback_data=f"cancel_{row['booking_id']}"))
+        bot.send_message(message.chat.id, f"🔖 Ваша бронь: стол {row['table_id']} на {row['time_slot']}.", reply_markup=kb)
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Ошибка: {e}")
+
+@bot.message_handler(func=lambda m: m.text == "📖 Меню")
+def on_menu(message: types.Message):
+    # Поставь реальные URL фото меню
+    photos = [
+        "https://example.com/menu1.jpg",
+        "https://example.com/menu2.jpg",
+    ]
+    for url in photos:
+        bot.send_photo(message.chat.id, photo=url)
+
+@bot.message_handler(func=lambda m: m.text == "🛠 Управление")
+def on_admin_panel(message: types.Message):
+    if not ADMIN_ID or message.chat.id != ADMIN_ID:
+        bot.send_message(message.chat.id, "У вас нет прав для этой команды.")
         return
-    user_booking_data[message.from_user.id]["guests"] = int(guests)
+    bot.send_message(message.chat.id, "Админ-панель: пока тут пусто 🙂", reply_markup=main_reply_kb(message.from_user.id))
 
-    kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="Отправить номер телефона", request_contact=True)]], 
-        resize_keyboard=True
+@bot.message_handler(func=lambda m: m.text == "🗂 История")
+def on_history_btn(message: types.Message):
+    # то же, что и /history
+    return cmd_history(message)
+
+# =========================
+# INLINE CALLBACKS
+# =========================
+@bot.callback_query_handler(func=lambda c: c.data.startswith("book_"))
+def on_pick_table(call: types.CallbackQuery):
+    table_id = int(call.data.split("_")[1])
+    user_flow[call.from_user.id] = {"table_id": table_id}
+    bot.edit_message_text(f"Стол {table_id} выбран. Выберите время:", chat_id=call.message.chat.id,
+                          message_id=call.message.id, reply_markup=build_time_inline(table_id))
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("time_"))
+def on_pick_time(call: types.CallbackQuery):
+    _, table_id, slot = call.data.split("_")
+    u = user_flow.get(call.from_user.id, {})
+    u.update({"table_id": int(table_id), "time_slot": slot})
+    user_flow[call.from_user.id] = u
+
+    # спросим гостей и номер телефона кнопкой «Отправить контакт»
+    bot.edit_message_text(
+        f"Вы выбрали стол {table_id} на {slot}. Сколько будет гостей?",
+        chat_id=call.message.chat.id, message_id=call.message.id
     )
-    await message.answer("Теперь отправьте свой номер телефона:", reply_markup=kb)
-    await state.set_state(BookingStates.waiting_for_phone)
 
-@dp.message(BookingStates.waiting_for_phone, F.contact)
-async def handle_phone(message: Message, state: FSMContext):
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row(types.KeyboardButton(text="Отправить номер телефона", request_contact=True))
+    bot.send_message(call.message.chat.id, "Теперь отправьте свой номер телефона:", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("cancel_"))
+def on_cancel(call: types.CallbackQuery):
+    booking_id = int(call.data.split("_")[1])
+    try:
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM bookings WHERE booking_id=%s;", (booking_id,))
+                conn.commit()
+        bot.edit_message_text("Бронь отменена.", chat_id=call.message.chat.id, message_id=call.message.id)
+    except Exception as e:
+        bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
+
+# =========================
+# CONTACT & WEB_APP DATA
+# =========================
+@bot.message_handler(content_types=['contact'])
+def on_contact(message: types.Message):
+    # ожидаем, что перед этим пользователь уже выбрал стол/время и ввёл число гостей (или пришлёт их текстом)
+    # guests постараемся взять из предыдущего сообщения, если пользователь присылал число
+    u = user_flow.get(message.from_user.id, {})
+    if "guests" not in u:
+        # попытаемся вытащить число гостей из последнего своего текста нельзя надёжно — попросим ввести явно
+        bot.send_message(message.chat.id, "Укажите количество гостей (числом):")
+        # пометим, что ждём гостей
+        u["await_guests"] = True
+        user_flow[message.from_user.id] = u
+        return
+
     phone = message.contact.phone_number
-    user_data = user_booking_data.get(message.from_user.id, {})
-    table_id = user_data.get("table_id")
-    time_slot = user_data.get("time_slot")
-    guests = user_data.get("guests")
+    finalize_booking(message, phone)
+
+@bot.message_handler(func=lambda m: True, content_types=['text'])
+def on_free_text(message: types.Message):
+    # перехватываем количество гостей, если мы его ждём
+    u = user_flow.get(message.from_user.id, {})
+    if u.get("await_guests"):
+        txt = (message.text or "").strip()
+        if txt.isdigit() and int(txt) > 0:
+            u["guests"] = int(txt)
+            u.pop("await_guests", None)
+            user_flow[message.from_user.id] = u
+            # теперь просим контакт
+            kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+            kb.row(types.KeyboardButton(text="Отправить номер телефона", request_contact=True))
+            bot.send_message(message.chat.id, "Отлично. Теперь отправьте свой номер телефона кнопкой ниже:", reply_markup=kb)
+        else:
+            bot.send_message(message.chat.id, "Введите корректное число гостей (например, 2).")
+        return
+
+    # прочие тексты — игнор/возврат меню
+    if message.text not in ["🦊 Забронировать", "📋 Моя бронь", "📖 Меню", "🛠 Управление", "🗂 История"]:
+        bot.send_message(message.chat.id, "Выберите действие на клавиатуре ниже 👇", reply_markup=main_reply_kb(message.from_user.id))
+
+@bot.message_handler(content_types=['web_app_data'])
+def on_webapp_data(message: types.Message):
+    # ожидаем JSON вида {"table_id":1,"time_slot":"19:00","guests":3,"phone":"+79990001122"}
+    import json
+    try:
+        data = json.loads(message.web_app_data.data)
+        table_id = int(data.get("table_id"))
+        time_slot = str(data.get("time_slot"))
+        guests = int(data.get("guests"))
+        phone = str(data.get("phone") or "")
+
+        # сохраним и выполним финализацию
+        user_flow[message.from_user.id] = {"table_id": table_id, "time_slot": time_slot, "guests": guests}
+        finalize_booking(message, phone)
+    except Exception as e:
+        print("Ошибка web_app_data:", e)
+        bot.send_message(message.chat.id, "Ошибка при обработке данных из веб-интерфейса.")
+
+def finalize_booking(message: types.Message, phone: str):
+    u = user_flow.get(message.from_user.id, {})
+    table_id = u.get("table_id")
+    time_slot = u.get("time_slot")
+    guests = u.get("guests")
+
+    if not (table_id and time_slot and guests):
+        bot.send_message(message.chat.id, "Не хватает данных для бронирования. Начните заново через «🦊 Забронировать».")
+        return
 
     now = datetime.now()
     booking_for = now.replace(hour=int(time_slot[:2]), minute=int(time_slot[3:]), second=0, microsecond=0)
     if booking_for < now:
         booking_for += timedelta(days=1)
 
-    async with db_pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
-            VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)
-        """, message.from_user.id, message.from_user.full_name, phone, table_id, time_slot, guests, booking_for)
+    try:
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                """, (message.from_user.id, message.from_user.full_name, phone, table_id, time_slot, guests, datetime.now(), booking_for))
+                conn.commit()
+        bot.send_message(message.chat.id, f"✅ Бронь подтверждена: стол {table_id}, время {time_slot}, гостей: {guests}",
+                         reply_markup=main_reply_kb(message.from_user.id))
+        if ADMIN_ID:
+            bot.send_message(ADMIN_ID, f"Новая бронь:\nПользователь: {message.from_user.full_name}\nСтол: {table_id}\nВремя: {time_slot}\nГостей: {guests}\nТелефон: {phone}")
+        user_flow.pop(message.from_user.id, None)
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Ошибка при бронировании: {e}")
 
-    await message.answer(
-        f"✅ Бронь подтверждена: стол {table_id}, время {time_slot}, гостей: {guests}",
-        reply_markup=get_reply_keyboard(message.from_user.id)
-    )
-    await state.clear()
-    user_booking_data.pop(message.from_user.id, None)
+# =========================
+# WEBHOOK (Flask)
+# =========================
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    if request.headers.get("content-type") != "application/json":
+        return "Unsupported Media Type", 415
+    json_str = request.get_data().decode("utf-8")
+    update = telebot.types.Update.de_json(json_str)
+    bot.process_new_updates([update])
+    return "OK", 200
 
-@dp.message(F.text == "📝 Моя бронь")
-async def handle_my_booking_button(message: Message):
-    user_id = message.from_user.id
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("""
-            SELECT booking_id, table_id, time_slot FROM bookings
-            WHERE user_id = $1 AND booking_for > NOW()
-            ORDER BY booking_for LIMIT 1
-        """, user_id)
-    if row:
-        booking_id, table_id, time_slot = row
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отменить бронь", callback_data=f"cancel_{booking_id}")]
-        ])
-        await message.answer(f"📝 Ваша бронь: стол {table_id} на {time_slot}.", reply_markup=kb)
-    else:
-        await message.answer("У вас нет активной брони.", reply_markup=get_reply_keyboard(user_id))
+@app.route("/")
+def index():
+    return "Бот работает!", 200
 
-@dp.message(F.text == "📖 Меню")
-async def show_menu(message: Message):
-    photos_urls = [
-        "https://raw.githubusercontent.com/youruser/repo/main/menu1.jpg",
-        "https://raw.githubusercontent.com/youruser/repo/main/menu2.jpg",
-        "https://raw.githubusercontent.com/youruser/repo/main/menu3.jpg",
-        "https://raw.githubusercontent.com/youruser/repo/main/menu4.jpg",
-        "https://raw.githubusercontent.com/youruser/repo/main/menu5.jpg",
-        "https://raw.githubusercontent.com/youruser/repo/main/menu6.jpg",
-    ]
-    for url in photos_urls:
-        await message.answer_photo(photo=url)
-
-@dp.callback_query(F.data.startswith("cancel_"))
-async def handle_cancel_booking(callback: CallbackQuery):
-    booking_id = int(callback.data.split("_")[1])
-    async with db_pool.acquire() as conn:
-        await conn.execute("DELETE FROM bookings WHERE booking_id = $1", booking_id)
-    await callback.message.edit_text("❌ Ваша бронь отменена.", reply_markup=get_reply_keyboard(callback.from_user.id))
-
-async def main():
-    await init_db()
-    await dp.start_polling(bot)
-
+# =========================
+# MAIN / WEBHOOK SETUP
+# =========================
 if __name__ == "__main__":
-    asyncio.run(main())
+    port = int(os.environ.get("PORT", 5000))
+    external_url = (os.environ.get("RENDER_EXTERNAL_URL") or "").strip()
+    if not external_url:
+        raise RuntimeError("Ошибка: RENDER_EXTERNAL_URL пуст или не задан!")
+    if not external_url.startswith("https://"):
+        raise RuntimeError("Ошибка: Telegram webhook требует HTTPS!")
+
+    # Ставим webhook на /webhook
+    try:
+        bot.remove_webhook()
+        webhook_url = f"{external_url}/webhook"
+        ok = bot.set_webhook(url=webhook_url)
+        print(f"Webhook set -> {webhook_url} ; ok={ok}")
+    except telebot.apihelper.ApiTelegramException as e:
+        print("Ошибка установки webhook:", e)
+
+    app.run(host="0.0.0.0", port=port)

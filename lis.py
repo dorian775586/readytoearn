@@ -216,17 +216,15 @@ def on_book_btn(message: types.Message):
 
 @bot.message_handler(func=lambda m: m.text == "📋 Моя бронь")
 def on_my_booking(message: types.Message):
-    try:
-        with db_connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT booking_id, table_id, time_slot
-                    FROM bookings
-                    WHERE user_id=%s AND (booking_for IS NULL OR booking_for > NOW())
-                    ORDER BY booked_at DESC
-                    LIMIT 1;
-                """, (message.from_user.id,))
-                row = cur.fetchone()
+    with db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT booking_id, table_id, time_slot, guests
+                FROM bookings
+                WHERE user_id=%s AND (booking_for IS NULL OR booking_for::timestamp > NOW())
+                ORDER BY booking_for ASC;
+            """, (message.from_user.id,))
+            rows = cur.fetchall()
         if not row:
             bot.send_message(message.chat.id, "У вас нет активной брони.", reply_markup=main_reply_kb(message.from_user.id))
             return

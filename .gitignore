@@ -1,4 +1,10 @@
+# Node modules
+node_modules/
+
+# Environment variables
+.env
+
+# Python (если есть)
 __pycache__/
 *.pyc
-.env
 .venv/

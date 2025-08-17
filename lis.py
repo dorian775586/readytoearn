@@ -404,6 +404,47 @@ def webhook():
 def index():
     return "Бот работает!", 200
 
+    # =========================
+# BOOKING API (для WebApp / внешних вызовов)
+# =========================
+@app.route("/book", methods=["POST"])
+def book_api():
+    try:
+        data = request.get_json(force=True)
+        user_id = int(data.get("user_id", 0))
+        user_name = str(data.get("user_name") or "Неизвестно")
+        table_id = int(data["table_id"])
+        time_slot = str(data["time_slot"])
+        guests = int(data["guests"])
+        phone = str(data.get("phone") or "")
+
+        now = datetime.now()
+        booking_for = now.replace(hour=int(time_slot[:2]), minute=int(time_slot[3:]), second=0, microsecond=0)
+        if booking_for < now:
+            booking_for += timedelta(days=1)
+
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                """, (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(), booking_for))
+                conn.commit()
+
+        # уведомляем админа
+        if ADMIN_ID:
+            try:
+                bot.send_message(ADMIN_ID, f"Новая бронь (через API):\nПользователь: {user_name}\nСтол: {table_id}\nВремя: {time_slot}\nГостей: {guests}\nТелефон: {phone}")
+            except Exception as e:
+                print("Не удалось отправить сообщение админу:", e)
+
+        return {"status": "ok", "message": "Бронь успешно создана"}, 200
+
+    except Exception as e:
+        print("Ошибка /book:", e)
+        return {"status": "error", "message": str(e)}, 400
+
+
 # =========================
 # MAIN / WEBHOOK SETUP
 # =========================

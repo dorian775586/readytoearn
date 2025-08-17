@@ -341,21 +341,9 @@ def on_free_text(message: types.Message):
 
 @bot.message_handler(content_types=['web_app_data'])
 def on_webapp_data(message: types.Message):
-    # ожидаем JSON вида {"table_id":1,"time_slot":"19:00","guests":3,"phone":"+79990001122"}
-    import json
-    try:
-        data = json.loads(message.web_app_data.data)
-        table_id = int(data.get("table_id"))
-        time_slot = str(data.get("time_slot"))
-        guests = int(data.get("guests"))
-        phone = str(data.get("phone") or "")
+    print("ПРИШЛИ ДАННЫЕ ОТ WEBAPP:", message.web_app_data.data)
+    bot.send_message(message.chat.id, "Данные получены, бронирование пока тестовое.")
 
-        # сохраним и выполним финализацию
-        user_flow[message.from_user.id] = {"table_id": table_id, "time_slot": time_slot, "guests": guests}
-        finalize_booking(message, phone)
-    except Exception as e:
-        print("Ошибка web_app_data:", e)
-        bot.send_message(message.chat.id, "Ошибка при обработке данных из веб-интерфейса.")
 
 def finalize_booking(message: types.Message, phone: str):
     u = user_flow.get(message.from_user.id, {})

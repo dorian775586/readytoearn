@@ -43,49 +43,7 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 app = Flask(__name__)
 CORS(app)
 
-# =========================
-# DB INIT
-# =========================
-def db_connect():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
-def init_db():
-    try:
-        with db_connect() as conn:
-            with conn.cursor() as cur:
-                # Базовые таблицы
-                cur.execute("""
-                CREATE TABLE IF NOT EXISTS tables (
-                    id INT PRIMARY KEY
-                );
-                """)
-                cur.execute("""
-                CREATE TABLE IF NOT EXISTS bookings (
-                    booking_id SERIAL PRIMARY KEY,
-                    table_id INT NOT NULL,
-                    time_slot TEXT NOT NULL,
-                    booked_at TIMESTAMP NOT NULL,
-                    booking_for TIMESTAMP,
-                    phone TEXT,
-                    guests INT
-                );
-                """)
-
-                # На случай старой схемы — добавим недостающие поля
-                cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS phone TEXT;")
-                cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS guests INT;")
-                cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_for TIMESTAMP;")
-
-                # Наполним столики (если пусто)
-                cur.execute("SELECT COUNT(*) AS c FROM tables;")
-                c = cur.fetchone()["c"]
-                if c == 0:
-                    cur.execute("INSERT INTO tables (id) SELECT generate_series(1, 10);")
-
-            conn.commit()
-        print("База данных: OK")
-    except Exception as e:
-        print(f"Ошибка инициализации базы: {e}")
 
 
 # =========================

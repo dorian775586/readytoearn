@@ -6,6 +6,7 @@ from telebot import types
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from flask import Flask, request
+from flask_cors import CORS
 
 # =========================
 # ENV
@@ -38,6 +39,7 @@ if ADMIN_ID_ENV:
 # =========================
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 app = Flask(__name__)
+CORS(app)
 
 # =========================
 # DB INIT

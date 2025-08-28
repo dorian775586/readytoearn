@@ -16,11 +16,12 @@ CREATE TABLE IF NOT EXISTS tables (
 """)
 
 # Создаём таблицу бронирований
+# 🆕 ПОМЕНЯЙТЕ ЗДЕСЬ
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS bookings (
     booking_id SERIAL PRIMARY KEY,
-    user_id BIGINT NOT NULL,
-    user_name TEXT NOT NULL,
+    user_id BIGINT,
+    user_name TEXT,
     table_id INTEGER NOT NULL,
     time_slot TEXT NOT NULL,
     booked_at TEXT NOT NULL,

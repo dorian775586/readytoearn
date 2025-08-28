@@ -399,26 +399,31 @@ def index():
 # =========================
 @app.route("/book", methods=["POST"])
 def book_api():
+    """Обработчик POST-запросов с данными из Web App"""
     try:
-        data = request.get_json(force=True)
-        user_id = int(data.get("user_id", 0))
-        user_name = str(data.get("user_name") or "Неизвестно")
-        table_id = int(data["table_id"])
-        time_slot = str(data["time_slot"])
-        guests = int(data["guests"])
-        phone = str(data.get("phone") or "")
+        data = request.json
+        if not data:
+            return {"status": "error", "message": "Нет данных"}, 400
 
-        now = datetime.now()
-        booking_for = now.replace(hour=int(time_slot[:2]), minute=int(time_slot[3:]), second=0, microsecond=0)
-        if booking_for < now:
-            booking_for += timedelta(days=1)
+        user_id = data.get("user_id")
+        user_name = data.get("user_name")
+        table_id = data.get("table") # 🆕 Исправлено: "table" вместо "table_id"
+        time_slot = data.get("time") # 🆕 Исправлено: "time" вместо "time_slot"
+        guests = data.get("guests")
+        phone = data.get("phone")
 
+        # Проверка данных
+        if not all([user_id, user_name, table_id, time_slot, guests, phone]):
+            return {"status": "error", "message": "Не все обязательные поля заполнены."}, 400
+
+        # Сохранение брони в базу
         with db_connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
-                """, (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(), booking_for))
+            with conn.cursor() as cursor:
+                booking_for = f"Стол {table_id} на {guests} чел. в {time_slot}"
+                cursor.execute(
+                    "INSERT INTO bookings (user_id, user_name, table_id, time_slot, booked_at, booking_for, phone) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (user_id, user_name, table_id, time_slot, datetime.now(), booking_for, phone)
+                )
                 conn.commit()
 
         # уведомляем админа

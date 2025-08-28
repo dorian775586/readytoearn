@@ -351,10 +351,9 @@ def webhook():
 def index():
     return "Бот работает!", 200
 
-    # =========================
+   # =========================
 # BOOKING API (для WebApp / внешних вызовов)
 # =========================
-
 @app.route("/book", methods=["POST"])
 def book_api():
     """Обработчик POST-запросов с данными из Web App"""
@@ -369,7 +368,8 @@ def book_api():
         time_slot = data.get('time')
         date_str = data.get('date')
 
-        if not all([user_id, user_name, phone, guests, table_id, time_slot, date_str]):
+        # Теперь мы проверяем только те поля, которые всегда обязательны
+        if not all([phone, guests, table_id, time_slot, date_str]):
             return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
 
         # Соединяемся с базой
@@ -405,7 +405,7 @@ def book_api():
     except Exception as e:
         print("Ошибка /book:", e)
         return {"status": "error", "message": str(e)}, 400
-
+        
 # =========================
 # MAIN / WEBHOOK SETUP
 # =========================

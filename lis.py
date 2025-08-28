@@ -360,12 +360,14 @@ def book_api():
     try:
         # Получаем данные из запроса
         data = request.json
+        user_id = data.get('user_id')          # 🆕 ДОБАВЛЕНО
+        user_name = data.get('user_name')      # 🆕 ДОБАВЛЕНО
         phone = data.get('phone')
         guests = data.get('guests')
         table_id = data.get('table')
         time_slot = data.get('time')
 
-        if not all([phone, guests, table_id, time_slot]):
+        if not all([user_id, user_name, phone, guests, table_id, time_slot]):
             return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
 
         conn = psycopg2.connect(DATABASE_URL)
@@ -377,15 +379,15 @@ def book_api():
         # Записываем бронирование в базу
         with conn.cursor() as cursor:
             cursor.execute(
-                "INSERT INTO bookings (table_id, time_slot, booked_at, booking_for, phone) VALUES (%s, %s, %s, %s, %s)",
-                (table_id, time_slot, datetime.now(), booking_for, phone)
+                "INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, booked_at, booking_for) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (user_id, user_name, phone, table_id, time_slot, datetime.now(), booking_for)
             )
             conn.commit()
 
         # уведомляем админа
         if ADMIN_ID:
             try:
-                bot.send_message(ADMIN_ID, f"Новая бронь (через API):\nСтол: {table_id}\nВремя: {time_slot}\nГостей: {guests}\nТелефон: {phone}")
+                bot.send_message(ADMIN_ID, f"Новая бронь (через API):\nПользователь: {user_name}\nСтол: {table_id}\nВремя: {time_slot}\nГостей: {guests}\nТелефон: {phone}")
             except Exception as e:
                 print("Не удалось отправить сообщение админу:", e)
 
@@ -394,7 +396,7 @@ def book_api():
     except Exception as e:
         print("Ошибка /book:", e)
         return {"status": "error", "message": str(e)}, 400
-
+        
 # =========================
 # MAIN / WEBHOOK SETUP
 # =========================

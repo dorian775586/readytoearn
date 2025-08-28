@@ -7,6 +7,8 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from flask import Flask, request
 from flask_cors import CORS
+import baza
+
 
 # =========================
 # ENV
@@ -411,10 +413,6 @@ def book_api():
         time_slot = data.get("time") # 🆕 Исправлено: "time" вместо "time_slot"
         guests = data.get("guests")
         phone = data.get("phone")
-
-        # Проверка данных
-        if not all([user_id, user_name, table_id, time_slot, guests, phone]):
-            return {"status": "error", "message": "Не все обязательные поля заполнены."}, 400
 
         # Сохранение брони в базу
         with db_connect() as conn:

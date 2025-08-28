@@ -1,1 +1,3 @@
-web: python lis.py
+web: python baza.py
+
+

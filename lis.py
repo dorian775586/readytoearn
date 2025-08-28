@@ -360,15 +360,16 @@ def book_api():
     try:
         # Получаем данные из запроса
         data = request.json
-        user_id = data.get('user_id')
-        user_name = data.get('user_name')
+        # Если user_id/user_name пустые, присваиваем им значения по умолчанию
+        user_id = data.get('user_id') or 0         # 🆕 ИСПРАВЛЕНО
+        user_name = data.get('user_name') or 'Неизвестный' # 🆕 ИСПРАВЛЕНО
         phone = data.get('phone')
         guests = data.get('guests')
         table_id = data.get('table')
         time_slot = data.get('time')
         date_str = data.get('date')
 
-        # Теперь мы проверяем только те поля, которые всегда обязательны
+        # Проверяем только те поля, которые всегда должны быть
         if not all([phone, guests, table_id, time_slot, date_str]):
             return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
 
@@ -405,7 +406,7 @@ def book_api():
     except Exception as e:
         print("Ошибка /book:", e)
         return {"status": "error", "message": str(e)}, 400
-        
+
 # =========================
 # MAIN / WEBHOOK SETUP
 # =========================

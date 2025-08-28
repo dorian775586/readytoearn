@@ -89,7 +89,6 @@ def init_db():
     except Exception as e:
         print(f"Ошибка инициализации базы: {e}")
 
-init_db()
 
 # =========================
 # HELPERS (UI)

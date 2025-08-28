@@ -400,31 +400,34 @@ def index():
 def book_api():
     """Обработчик POST-запросов с данными из Web App"""
     try:
+        # Получаем данные из запроса
         data = request.json
-        if not data:
-            return {"status": "error", "message": "Нет данных"}, 400
+        phone = data.get('phone')
+        guests = data.get('guests')
+        table_id = data.get('table')
+        time_slot = data.get('time')
 
-        user_id = data.get("user_id")
-        user_name = data.get("user_name")
-        table_id = data.get("table") # 🆕 Исправлено: "table" вместо "table_id"
-        time_slot = data.get("time") # 🆕 Исправлено: "time" вместо "time_slot"
-        guests = data.get("guests")
-        phone = data.get("phone")
+        if not all([phone, guests, table_id, time_slot]):
+            return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
 
-        # Сохранение брони в базу
-        with db_connect() as conn:
-            with conn.cursor() as cursor:
-                booking_for = f"Стол {table_id} на {guests} чел. в {time_slot}"
-                cursor.execute(
-                    "INSERT INTO bookings (user_id, user_name, table_id, time_slot, booked_at, booking_for, phone) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                    (user_id, user_name, table_id, time_slot, datetime.now(), booking_for, phone)
-                )
-                conn.commit()
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+
+        # Создаем строку с описанием брони для админа
+        booking_for = f"Стол {table_id} на {guests} чел. в {time_slot}"
+
+        # Записываем бронирование в базу
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO bookings (table_id, time_slot, booked_at, booking_for, phone) VALUES (%s, %s, %s, %s, %s)",
+                (table_id, time_slot, datetime.now(), booking_for, phone)
+            )
+            conn.commit()
 
         # уведомляем админа
         if ADMIN_ID:
             try:
-                bot.send_message(ADMIN_ID, f"Новая бронь (через API):\nПользователь: {user_name}\nСтол: {table_id}\nВремя: {time_slot}\nГостей: {guests}\nТелефон: {phone}")
+                bot.send_message(ADMIN_ID, f"Новая бронь (через API):\nСтол: {table_id}\nВремя: {time_slot}\nГостей: {guests}\nТелефон: {phone}")
             except Exception as e:
                 print("Не удалось отправить сообщение админу:", e)
 
@@ -433,7 +436,6 @@ def book_api():
     except Exception as e:
         print("Ошибка /book:", e)
         return {"status": "error", "message": str(e)}, 400
-
 
 # =========================
 # MAIN / WEBHOOK SETUP

@@ -62,8 +62,6 @@ def init_db():
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS bookings (
                     booking_id SERIAL PRIMARY KEY,
-                    user_id BIGINT NOT NULL,
-                    user_name TEXT NOT NULL,
                     table_id INT NOT NULL,
                     time_slot TEXT NOT NULL,
                     booked_at TIMESTAMP NOT NULL,

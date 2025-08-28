@@ -354,33 +354,42 @@ def index():
     # =========================
 # BOOKING API (для WebApp / внешних вызовов)
 # =========================
+
 @app.route("/book", methods=["POST"])
 def book_api():
     """Обработчик POST-запросов с данными из Web App"""
     try:
         # Получаем данные из запроса
         data = request.json
-        user_id = data.get('user_id')          # 🆕 ДОБАВЛЕНО
-        user_name = data.get('user_name')      # 🆕 ДОБАВЛЕНО
+        user_id = data.get('user_id')
+        user_name = data.get('user_name')
         phone = data.get('phone')
         guests = data.get('guests')
         table_id = data.get('table')
         time_slot = data.get('time')
+        date_str = data.get('date')
 
-        if not all([user_id, user_name, phone, guests, table_id, time_slot]):
+        if not all([user_id, user_name, phone, guests, table_id, time_slot, date_str]):
             return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
 
+        # Соединяемся с базой
         conn = psycopg2.connect(DATABASE_URL)
-        cursor = conn.cursor()
 
         # Создаем строку с описанием брони для админа
         booking_for = f"Стол {table_id} на {guests} чел. в {time_slot}"
+        
+        # Парсим дату и время для корректного формата PostgreSQL
+        booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        booking_datetime = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
 
         # Записываем бронирование в базу
         with conn.cursor() as cursor:
             cursor.execute(
-                "INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, booked_at, booking_for) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (user_id, user_name, phone, table_id, time_slot, datetime.now(), booking_for)
+                """
+                INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                """,
+                (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(), booking_datetime)
             )
             conn.commit()
 
@@ -396,7 +405,7 @@ def book_api():
     except Exception as e:
         print("Ошибка /book:", e)
         return {"status": "error", "message": str(e)}, 400
-        
+
 # =========================
 # MAIN / WEBHOOK SETUP
 # =========================

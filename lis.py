@@ -97,66 +97,18 @@ def init_db():
 def main_reply_kb(user_id: int) -> types.ReplyKeyboardMarkup:
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     row1 = [
-        types.KeyboardButton("🦊 Забронировать"),
+        # ✅ Изменено: теперь эта кнопка открывает веб-приложение
+        types.KeyboardButton("🦊 Забронировать", web_app=types.WebAppInfo(url=WEBAPP_URL)),
         types.KeyboardButton("📋 Моя бронь"),
     ]
     row2 = [types.KeyboardButton("📖 Меню")]
-    row3 = [types.KeyboardButton("🌐 Веб-интерфейс", web_app=types.WebAppInfo(url=WEBAPP_URL))]
     kb.row(*row1)
     kb.row(*row2)
-    kb.row(*row3)
     if ADMIN_ID and user_id == ADMIN_ID:
         kb.row(types.KeyboardButton("🛠 Управление"), types.KeyboardButton("🗂 История"))
     return kb
 
-def get_time_slots():
-    slots = []
-    start = datetime.strptime("12:00", "%H:%M")
-    end = datetime.strptime("23:00", "%H:%M")
-    while start <= end:
-        slots.append(start.strftime("%H:%M"))
-        start += timedelta(minutes=30)
-    return slots
-
-def build_tables_inline():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    try:
-        with db_connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT id FROM tables ORDER BY id;")
-                rows = cur.fetchall()
-        buttons = [types.InlineKeyboardButton(text=f"🪑 Стол {r['id']}", callback_data=f"book_{r['id']}") for r in rows]
-        # разложим по 2 в ряд
-        for i in range(0, len(buttons), 2):
-            markup.row(*buttons[i:i+2])
-    except Exception as e:
-        print("Ошибка build_tables_inline:", e)
-    return markup
-
-def build_time_inline(table_id: int):
-    markup = types.InlineKeyboardMarkup(row_width=3)
-    busy = set()
-    try:
-        with db_connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT time_slot FROM bookings
-                    WHERE table_id=%s AND (booking_for IS NULL OR booking_for > NOW());
-                """, (table_id,))
-                rows = cur.fetchall()
-                busy = {r["time_slot"] for r in rows}
-    except Exception as e:
-        print("Ошибка build_time_inline:", e)
-
-    free_slots = [s for s in get_time_slots() if s not in busy]
-    buttons = [types.InlineKeyboardButton(text=s, callback_data=f"time_{table_id}_{s}") for s in free_slots]
-    # по 3 в ряд
-    for i in range(0, len(buttons), 3):
-        markup.row(*buttons[i:i+3])
-    return markup
-
-# Храним временные данные брони по юзеру (простая in-memory «FSM»)
-user_flow = {}  # user_id -> {"table_id": int, "time_slot": "HH:MM", "guests": int}
+# Удалены функции build_tables_inline и build_time_inline, так как они больше не нужны для бронирования в чате
 
 # =========================
 # COMMANDS
@@ -198,25 +150,7 @@ def cmd_history(message: types.Message):
 # =========================
 # TEXT BUTTONS
 # =========================
-@bot.message_handler(func=lambda m: m.text == "🦊 Забронировать")
-def on_book_btn(message: types.Message):
-    # Проверим активную бронь
-    try:
-        with db_connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT 1 FROM bookings
-                    WHERE user_id=%s AND (booking_for IS NULL OR booking_for > NOW())
-                    LIMIT 1;
-                """, (message.from_user.id,))
-                row = cur.fetchone()
-        if row:
-            bot.send_message(message.chat.id, "У вас уже есть активная бронь.", reply_markup=main_reply_kb(message.from_user.id))
-            return
-    except Exception as e:
-        print("Ошибка проверки активной брони:", e)
-
-    bot.send_message(message.chat.id, "Выберите столик:", reply_markup=build_tables_inline())
+# ✅ Удален обработчик on_book_btn, так как бронирование теперь только через веб-интерфейс
 
 @bot.message_handler(func=lambda m: m.text == "📋 Моя бронь")
 def on_my_booking(message: types.Message):
@@ -251,12 +185,42 @@ def on_menu(message: types.Message):
     for url in photos:
         bot.send_photo(message.chat.id, photo=url)
 
+# ✅ Изменено: теперь эта кнопка показывает список броней с кнопками отмены
 @bot.message_handler(func=lambda m: m.text == "🛠 Управление")
 def on_admin_panel(message: types.Message):
     if not ADMIN_ID or message.chat.id != ADMIN_ID:
         bot.send_message(message.chat.id, "У вас нет прав для этой команды.")
         return
-    bot.send_message(message.chat.id, "Админ-панель: пока тут пусто 🙂", reply_markup=main_reply_kb(message.from_user.id))
+    try:
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                # Получаем все будущие бронирования
+                cur.execute("""
+                    SELECT booking_id, user_name, table_id, time_slot, booking_for, phone
+                    FROM bookings
+                    WHERE booking_for > NOW()
+                    ORDER BY booking_for ASC;
+                """)
+                rows = cur.fetchall()
+        if not rows:
+            bot.send_message(message.chat.id, "Активных бронирований нет.")
+            return
+        
+        text = "<b>Список активных бронирований:</b>\n\n"
+        for r in rows:
+            booking_date = r['booking_for'].strftime("%Y-%m-%d")
+            text += f"🔖 Бронь #{r['booking_id']} — {r['user_name']}\n"
+            text += f"  - Стол: {r['table_id']}\n"
+            text += f"  - Время: {r['time_slot']} ({booking_date})\n"
+            text += f"  - Телефон: {r['phone']}\n"
+            
+            kb = types.InlineKeyboardMarkup()
+            kb.add(types.InlineKeyboardButton(text="❌ Отменить", callback_data=f"admin_cancel_{r['booking_id']}"))
+            bot.send_message(message.chat.id, text, reply_markup=kb)
+            text = "" # сбросим текст, чтобы он не дублировался
+
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Ошибка админ-панели: {e}")
 
 @bot.message_handler(func=lambda m: m.text == "🗂 История")
 def on_history_btn(message: types.Message):
@@ -266,119 +230,46 @@ def on_history_btn(message: types.Message):
 # =========================
 # INLINE CALLBACKS
 # =========================
-@bot.callback_query_handler(func=lambda c: c.data.startswith("book_"))
-def on_pick_table(call: types.CallbackQuery):
-    table_id = int(call.data.split("_")[1])
-    user_flow[call.from_user.id] = {"table_id": table_id}
-    bot.edit_message_text(f"Стол {table_id} выбран. Выберите время:", chat_id=call.message.chat.id,
-                          message_id=call.message.id, reply_markup=build_time_inline(table_id))
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("time_"))
-def on_pick_time(call: types.CallbackQuery):
-    _, table_id, slot = call.data.split("_")
-    u = user_flow.get(call.from_user.id, {})
-    u.update({"table_id": int(table_id), "time_slot": slot})
-    user_flow[call.from_user.id] = u
-
-    # спросим гостей и номер телефона кнопкой «Отправить контакт»
-    bot.edit_message_text(
-        f"Вы выбрали стол {table_id} на {slot}. Сколько будет гостей?",
-        chat_id=call.message.chat.id, message_id=call.message.id
-    )
-
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.row(types.KeyboardButton(text="Отправить номер телефона", request_contact=True))
-    bot.send_message(call.message.chat.id, "Теперь отправьте свой номер телефона:", reply_markup=kb)
+# ✅ Удалены обработчики on_pick_table и on_pick_time
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("cancel_"))
-def on_cancel(call: types.CallbackQuery):
+def on_cancel_user(call: types.CallbackQuery):
     booking_id = int(call.data.split("_")[1])
+    try:
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM bookings WHERE booking_id=%s AND user_id=%s;", (booking_id, call.from_user.id))
+                conn.commit()
+        bot.edit_message_text("Бронь отменена.", chat_id=call.message.chat.id, message_id=call.message.id)
+    except Exception as e:
+        bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
+
+# ✅ Добавлен новый обработчик для админской отмены
+@bot.callback_query_handler(func=lambda c: c.data.startswith("admin_cancel_"))
+def on_cancel_admin(call: types.CallbackQuery):
+    booking_id = int(call.data.split("_")[2])
+    if not ADMIN_ID or call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, "У вас нет прав для этого действия.", show_alert=True)
+        return
     try:
         with db_connect() as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM bookings WHERE booking_id=%s;", (booking_id,))
                 conn.commit()
-        bot.edit_message_text("Бронь отменена.", chat_id=call.message.chat.id, message_id=call.message.id)
+        bot.edit_message_text(f"Бронь #{booking_id} успешно отменена.", chat_id=call.message.chat.id, message_id=call.message.id)
+        bot.answer_callback_query(call.id, "Бронь отменена.", show_alert=True)
     except Exception as e:
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
 
 # =========================
 # CONTACT & WEB_APP DATA
 # =========================
-@bot.message_handler(content_types=['contact'])
-def on_contact(message: types.Message):
-    # ожидаем, что перед этим пользователь уже выбрал стол/время и ввёл число гостей (или пришлёт их текстом)
-    # guests постараемся взять из предыдущего сообщения, если пользователь присылал число
-    u = user_flow.get(message.from_user.id, {})
-    if "guests" not in u:
-        # попытаемся вытащить число гостей из последнего своего текста нельзя надёжно — попросим ввести явно
-        bot.send_message(message.chat.id, "Укажите количество гостей (числом):")
-        # пометим, что ждём гостей
-        u["await_guests"] = True
-        user_flow[message.from_user.id] = u
-        return
-
-    phone = message.contact.phone_number
-    finalize_booking(message, phone)
-
-@bot.message_handler(func=lambda m: True, content_types=['text'])
-def on_free_text(message: types.Message):
-    # перехватываем количество гостей, если мы его ждём
-    u = user_flow.get(message.from_user.id, {})
-    if u.get("await_guests"):
-        txt = (message.text or "").strip()
-        if txt.isdigit() and int(txt) > 0:
-            u["guests"] = int(txt)
-            u.pop("await_guests", None)
-            user_flow[message.from_user.id] = u
-            # теперь просим контакт
-            kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-            kb.row(types.KeyboardButton(text="Отправить номер телефона", request_contact=True))
-            bot.send_message(message.chat.id, "Отлично. Теперь отправьте свой номер телефона кнопкой ниже:", reply_markup=kb)
-        else:
-            bot.send_message(message.chat.id, "Введите корректное число гостей (например, 2).")
-        return
-
-    # прочие тексты — игнор/возврат меню
-    if message.text not in ["🦊 Забронировать", "📋 Моя бронь", "📖 Меню", "🛠 Управление", "🗂 История"]:
-        bot.send_message(message.chat.id, "Выберите действие на клавиатуре ниже 👇", reply_markup=main_reply_kb(message.from_user.id))
-
+# ✅ Удалены обработчики on_contact, on_free_text и finalize_booking
 @bot.message_handler(content_types=['web_app_data'])
 def on_webapp_data(message: types.Message):
     print("ПРИШЛИ ДАННЫЕ ОТ WEBAPP:", message.web_app_data.data)
     bot.send_message(message.chat.id, "Данные получены, бронирование пока тестовое.")
 
-
-def finalize_booking(message: types.Message, phone: str):
-    u = user_flow.get(message.from_user.id, {})
-    table_id = u.get("table_id")
-    time_slot = u.get("time_slot")
-    guests = u.get("guests")
-
-    if not (table_id and time_slot and guests):
-        bot.send_message(message.chat.id, "Не хватает данных для бронирования. Начните заново через «🦊 Забронировать».")
-        return
-
-    now = datetime.now()
-    booking_for = now.replace(hour=int(time_slot[:2]), minute=int(time_slot[3:]), second=0, microsecond=0)
-    if booking_for < now:
-        booking_for += timedelta(days=1)
-
-    try:
-        with db_connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
-                """, (message.from_user.id, message.from_user.full_name, phone, table_id, time_slot, guests, datetime.now(), booking_for))
-                conn.commit()
-        bot.send_message(message.chat.id, f"✅ Бронь подтверждена: стол {table_id}, время {time_slot}, гостей: {guests}",
-                         reply_markup=main_reply_kb(message.from_user.id))
-        if ADMIN_ID:
-            bot.send_message(ADMIN_ID, f"Новая бронь:\nПользователь: {message.from_user.full_name}\nСтол: {table_id}\nВремя: {time_slot}\nГостей: {guests}\nТелефон: {phone}")
-        user_flow.pop(message.from_user.id, None)
-    except Exception as e:
-        bot.send_message(message.chat.id, f"Ошибка при бронировании: {e}")
 
 # =========================
 # BOOKING API (для WebApp / внешних вызовов)

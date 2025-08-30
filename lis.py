@@ -75,6 +75,9 @@ def init_db():
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS phone TEXT;")
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS guests INT;")
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_for TIMESTAMP;")
+                cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS user_id BIGINT;")
+                cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS user_name TEXT;")
+
 
                 # Наполним столики (если пусто)
                 cur.execute("SELECT COUNT(*) AS c FROM tables;")
@@ -386,32 +389,51 @@ def book_api():
     try:
         # Получаем данные из запроса
         data = request.json
+        # Если user_id/user_name пустые, присваиваем им значения по умолчанию
+        user_id = data.get('user_id') or 0
+        user_name = data.get('user_name') or 'Неизвестный'
         phone = data.get('phone')
         guests = data.get('guests')
         table_id = data.get('table')
         time_slot = data.get('time')
+        date_str = data.get('date')
 
-        if not all([phone, guests, table_id, time_slot]):
+        # Проверяем только те поля, которые всегда должны быть
+        if not all([phone, guests, table_id, time_slot, date_str]):
             return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
 
+        # Парсим дату и время для корректного формата PostgreSQL
+        booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        booking_datetime = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
+
+        # Соединяемся с базой
         conn = psycopg2.connect(DATABASE_URL)
-        cursor = conn.cursor()
 
-        # Создаем строку с описанием брони для админа
-        booking_for = f"Стол {table_id} на {guests} чел. в {time_slot}"
-
+        # 🆕 НОВАЯ ПРОВЕРКА НА СУЩЕСТВОВАНИЕ БРОНИ
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT 1 FROM bookings WHERE table_id = %s AND booked_at::date = %s AND time_slot = %s;",
+                (table_id, booking_date, time_slot)
+            )
+            existing_booking = cursor.fetchone()
+            if existing_booking:
+                return {"status": "error", "message": "Этот стол уже забронирован на это время."}, 409
+        
         # Записываем бронирование в базу
         with conn.cursor() as cursor:
             cursor.execute(
-                "INSERT INTO bookings (table_id, time_slot, booked_at, booking_for, phone) VALUES (%s, %s, %s, %s, %s)",
-                (table_id, time_slot, datetime.now(), booking_for, phone)
+                """
+                INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                """,
+                (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(), booking_datetime)
             )
             conn.commit()
 
         # уведомляем админа
         if ADMIN_ID:
             try:
-                bot.send_message(ADMIN_ID, f"Новая бронь (через API):\nСтол: {table_id}\nВремя: {time_slot}\nГостей: {guests}\nТелефон: {phone}")
+                bot.send_message(ADMIN_ID, f"Новая бронь (через API):\nПользователь: {user_name}\nСтол: {table_id}\nВремя: {time_slot}\nГостей: {guests}\nТелефон: {phone}")
             except Exception as e:
                 print("Не удалось отправить сообщение админу:", e)
 
@@ -436,8 +458,8 @@ def get_booked_times():
         
         with conn.cursor() as cursor:
             cursor.execute(
-                "SELECT time_slot FROM bookings WHERE table_id = %s AND booked_at::date = %s AND time_slot = %s;",
-                (table_id, date_str, time_slot)
+                "SELECT time_slot FROM bookings WHERE table_id = %s AND booked_at::date = %s;",
+                (table_id, date_str)
             )
             booked_times = [row[0] for row in cursor.fetchall()]
         
@@ -446,6 +468,21 @@ def get_booked_times():
     except Exception as e:
         print("Ошибка /get_booked_times:", e)
         return {"status": "error", "message": str(e)}, 400
+
+# =========================
+# TELEGRAM WEBHOOK ROUTE
+# =========================
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    """Обработчик обновлений, приходящих от Telegram"""
+    if request.headers.get("content-type") == "application/json":
+        json_string = request.get_data(as_text=True)
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return "OK", 200
+    else:
+        return "Invalid content type", 403
+
 
 # =========================
 # MAIN / WEBHOOK SETUP

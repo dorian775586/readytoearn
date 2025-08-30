@@ -394,6 +394,34 @@ def book_api():
             )
             conn.commit()
 
+# Добавьте этот код ниже функции book_api
+
+@app.route("/get_booked_times", methods=["GET"])
+def get_booked_times():
+    """Возвращает список занятых временных слотов для стола и даты"""
+    try:
+        table_id = request.args.get('table')
+        date_str = request.args.get('date')
+
+        if not all([table_id, date_str]):
+            return {"status": "error", "message": "Не хватает данных (стол или дата)"}, 400
+
+        # Соединяемся с базой
+        conn = psycopg2.connect(DATABASE_URL)
+        
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT time_slot FROM bookings WHERE table_id = %s AND booked_at::date = %s;",
+                (table_id, date_str)
+            )
+            booked_times = [row[0] for row in cursor.fetchall()]
+        
+        return {"status": "ok", "booked_times": booked_times}, 200
+
+    except Exception as e:
+        print("Ошибка /get_booked_times:", e)
+        return {"status": "error", "message": str(e)}, 400
+        
         # уведомляем админа
         if ADMIN_ID:
             try:

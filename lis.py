@@ -409,10 +409,10 @@ def book_api():
         # Соединяемся с базой
         conn = psycopg2.connect(DATABASE_URL)
 
-        # 🆕 НОВАЯ ПРОВЕРКА НА СУЩЕСТВОВАНИЕ БРОНИ
+        # 🆕 ИСПРАВЛЕННАЯ ПРОВЕРКА НА СУЩЕСТВОВАНИЕ БРОНИ (используем booking_for)
         with conn.cursor() as cursor:
             cursor.execute(
-                "SELECT 1 FROM bookings WHERE table_id = %s AND booked_at::date = %s AND time_slot = %s;",
+                "SELECT 1 FROM bookings WHERE table_id = %s AND booking_for::date = %s AND time_slot = %s;",
                 (table_id, booking_date, time_slot)
             )
             existing_booking = cursor.fetchone()
@@ -456,9 +456,10 @@ def get_booked_times():
         # Соединяемся с базой
         conn = psycopg2.connect(DATABASE_URL)
         
+        # 🆕 ИСПРАВЛЕННЫЙ ЗАПРОС (используем booking_for)
         with conn.cursor() as cursor:
             cursor.execute(
-                "SELECT time_slot FROM bookings WHERE table_id = %s AND booked_at::date = %s;",
+                "SELECT time_slot FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
                 (table_id, date_str)
             )
             booked_times = [row[0] for row in cursor.fetchall()]

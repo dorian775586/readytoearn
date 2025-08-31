@@ -317,7 +317,8 @@ def book_api():
         # уведомляем админа
         if ADMIN_ID:
             try:
-                bot.send_message(ADMIN_ID, f"Новая бронь (через API):\nПользователь: {user_name}\nСтол: {table_id}\nВремя: {time_slot}\nГостей: {guests}\nТелефон: {phone}")
+                # ✅ ИЗМЕНЕНО: добавлена дата бронирования в уведомление
+                bot.send_message(ADMIN_ID, f"Новая бронь (через API):\nПользователь: {user_name}\nСтол: {table_id}\nВремя: {time_slot}\nДата: {date_str}\nГостей: {guests}\nТелефон: {phone}")
             except Exception as e:
                 print("Не удалось отправить сообщение админу:", e)
 

@@ -248,8 +248,23 @@ def on_cancel_admin(call: types.CallbackQuery):
     try:
         with db_connect() as conn:
             with conn.cursor() as cur:
+                # Получаем данные о брони до её удаления
+                cur.execute("SELECT user_id, table_id, time_slot, booking_for FROM bookings WHERE booking_id=%s;", (booking_id,))
+                booking_info = cur.fetchone()
+
                 cur.execute("DELETE FROM bookings WHERE booking_id=%s;", (booking_id,))
                 conn.commit()
+        
+        # Уведомляем пользователя об отмене
+        if booking_info:
+            user_id = booking_info['user_id']
+            booking_date = booking_info['booking_for'].strftime("%d.%m.%Y")
+            message_text = f"❌ Ваша бронь отменена администратором.\n\nСтол: {booking_info['table_id']}\nДата: {booking_date}\nВремя: {booking_info['time_slot']}"
+            try:
+                bot.send_message(user_id, message_text)
+            except Exception as e:
+                print(f"Не удалось уведомить пользователя {user_id} об отмене брони: {e}")
+
         bot.edit_message_text(f"Бронь #{booking_id} успешно отменена.", chat_id=call.message.chat.id, message_id=call.message.id)
         bot.answer_callback_query(call.id, "Бронь отменена.", show_alert=True)
     except Exception as e:
@@ -303,6 +318,14 @@ def book_api():
                 (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(), booking_datetime)
             )
             conn.commit()
+            
+        # УВЕДОМЛЕНИЕ ПОЛЬЗОВАТЕЛЯ
+        try:
+            formatted_date = booking_date.strftime("%d.%m.%Y")
+            message_text = f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}"
+            bot.send_message(user_id, message_text)
+        except Exception as e:
+            print(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
 
         if ADMIN_ID:
             try:
@@ -381,7 +404,6 @@ def set_webhook_manual():
 def webhook():
     if request.headers.get("content-type") == "application/json":
         json_string = request.get_data(as_text=True)
-        # ИСПРАВЛЕНО
         update = types.Update.de_json(json_string)
         bot.process_new_updates([update])
         return "OK", 200

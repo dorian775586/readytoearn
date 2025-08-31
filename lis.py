@@ -5,7 +5,7 @@ import telebot
 from telebot import types
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import baza
 
@@ -362,6 +362,31 @@ def get_booked_times():
     except Exception as e:
         print("Ошибка /get_booked_times:", e)
         return {"status": "error", "message": str(e)}, 400
+
+# =========================
+# НОВЫЕ МАРШРУТЫ ДЛЯ ОТЛАДКИ
+# =========================
+@app.route("/")
+def index():
+    return "Bot is running.", 200
+
+@app.route("/set_webhook_manual")
+def set_webhook_manual():
+    external_url = (os.environ.get("RENDER_EXTERNAL_URL") or "").strip()
+    if not external_url:
+        return jsonify({"status": "error", "message": "RENDER_EXTERNAL_URL is not set"}), 500
+    if not external_url.startswith("https://"):
+        return jsonify({"status": "error", "message": "Webhook requires HTTPS"}), 500
+    
+    webhook_url = f"{external_url}/webhook"
+    try:
+        ok = bot.set_webhook(url=webhook_url)
+        if ok:
+            return jsonify({"status": "ok", "message": f"Webhook set to {webhook_url}"}), 200
+        else:
+            return jsonify({"status": "error", "message": "Failed to set webhook"}), 500
+    except telebot.apihelper.ApiTelegramException as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # =========================
 # TELEGRAM WEBHOOK ROUTE

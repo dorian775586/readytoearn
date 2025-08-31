@@ -59,6 +59,7 @@ def init_db():
                     id INT PRIMARY KEY
                 );
                 """)
+                # ✅ ИСПРАВЛЕНО: используем TIMESTAMP для booking_for
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS bookings (
                     booking_id SERIAL PRIMARY KEY,
@@ -108,8 +109,6 @@ def main_reply_kb(user_id: int) -> types.ReplyKeyboardMarkup:
         kb.row(types.KeyboardButton("🛠 Управление"), types.KeyboardButton("🗂 История"))
     return kb
 
-# Удалены функции build_tables_inline и build_time_inline, так как они больше не нужны для бронирования в чате
-
 # =========================
 # COMMANDS
 # =========================
@@ -150,17 +149,15 @@ def cmd_history(message: types.Message):
 # =========================
 # TEXT BUTTONS
 # =========================
-# ✅ Удален обработчик on_book_btn, так как бронирование теперь только через веб-интерфейс
-
 @bot.message_handler(func=lambda m: m.text == "📋 Моя бронь")
 def on_my_booking(message: types.Message):
     try:
         with db_connect() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT booking_id, table_id, time_slot
+                    SELECT booking_id, table_id, time_slot, booking_for
                     FROM bookings
-                    WHERE user_id=%s AND (booking_for IS NULL OR booking_for::timestamp > NOW())
+                    WHERE user_id=%s AND booking_for > NOW()
                     ORDER BY booked_at DESC
                     LIMIT 1;
                 """, (message.from_user.id,))
@@ -168,10 +165,11 @@ def on_my_booking(message: types.Message):
         if not row:
             bot.send_message(message.chat.id, "У вас нет активной брони.", reply_markup=main_reply_kb(message.from_user.id))
             return
-
+        
+        booking_date = row['booking_for'].strftime("%Y-%m-%d")
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton(text="❌ Отменить бронь", callback_data=f"cancel_{row['booking_id']}"))
-        bot.send_message(message.chat.id, f"🔖 Ваша бронь: стол {row['table_id']} на {row['time_slot']}.", reply_markup=kb)
+        bot.send_message(message.chat.id, f"🔖 Ваша бронь: стол {row['table_id']} на {row['time_slot']} ({booking_date}).", reply_markup=kb)
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка: {e}")
 
@@ -206,10 +204,9 @@ def on_admin_panel(message: types.Message):
             bot.send_message(message.chat.id, "Активных бронирований нет.")
             return
         
-        text = "<b>Список активных бронирований:</b>\n\n"
         for r in rows:
             booking_date = r['booking_for'].strftime("%Y-%m-%d")
-            text += f"🔖 Бронь #{r['booking_id']} — {r['user_name']}\n"
+            text = f"🔖 Бронь #{r['booking_id']} — {r['user_name']}\n"
             text += f"  - Стол: {r['table_id']}\n"
             text += f"  - Время: {r['time_slot']} ({booking_date})\n"
             text += f"  - Телефон: {r['phone']}\n"
@@ -217,7 +214,6 @@ def on_admin_panel(message: types.Message):
             kb = types.InlineKeyboardMarkup()
             kb.add(types.InlineKeyboardButton(text="❌ Отменить", callback_data=f"admin_cancel_{r['booking_id']}"))
             bot.send_message(message.chat.id, text, reply_markup=kb)
-            text = "" # сбросим текст, чтобы он не дублировался
 
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка админ-панели: {e}")
@@ -230,8 +226,6 @@ def on_history_btn(message: types.Message):
 # =========================
 # INLINE CALLBACKS
 # =========================
-# ✅ Удалены обработчики on_pick_table и on_pick_time
-
 @bot.callback_query_handler(func=lambda c: c.data.startswith("cancel_"))
 def on_cancel_user(call: types.CallbackQuery):
     booking_id = int(call.data.split("_")[1])
@@ -264,7 +258,6 @@ def on_cancel_admin(call: types.CallbackQuery):
 # =========================
 # CONTACT & WEB_APP DATA
 # =========================
-# ✅ Удалены обработчики on_contact, on_free_text и finalize_booking
 @bot.message_handler(content_types=['web_app_data'])
 def on_webapp_data(message: types.Message):
     print("ПРИШЛИ ДАННЫЕ ОТ WEBAPP:", message.web_app_data.data)

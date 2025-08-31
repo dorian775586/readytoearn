@@ -330,7 +330,8 @@ def book_api():
         if ADMIN_ID:
             try:
                 # ИЗМЕНЕНО: добавлена дата бронирования в уведомление
-                bot.send_message(ADMIN_ID, f"Новая бронь (через API):\nПользователь: {user_name}\nСтол: {table_id}\nВремя: {time_slot}\nДата: {date_str}\nГостей: {guests}\nТелефон: {phone}")
+                formatted_date = booking_date.strftime("%d.%m.%Y")
+                bot.send_message(ADMIN_ID, f"Новая бронь (через API):\nПользователь: {user_name}\nСтол: {table_id}\nВремя: {time_slot}\nДата: {formatted_date}\nГостей: {guests}\nТелефон: {phone}")
             except Exception as e:
                 print("Не удалось отправить сообщение админу:", e)
 

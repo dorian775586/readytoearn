@@ -28,7 +28,6 @@ if not RENDER_EXTERNAL_URL:
     raise RuntimeError("Ошибка: RENDER_EXTERNAL_URL не задан! Проверьте переменные окружения на Render.")
 
 
-# Явно добавим порт, если вдруг в URL его нет
 if "render.com/" in DATABASE_URL and ":5432" not in DATABASE_URL:
     DATABASE_URL = DATABASE_URL.replace(".render.com/", ".render.com:5432/")
 
@@ -96,7 +95,6 @@ def init_db():
 def main_reply_kb(user_id: int, user_name: str) -> types.ReplyKeyboardMarkup:
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     
-    # 🌟 ИЗМЕНЕНО: теперь кнопка "Забронировать" будет передавать user_id, user_name и bot_url
     web_app_url = f"{WEBAPP_URL}?user_id={user_id}&user_name={user_name}&bot_url={RENDER_EXTERNAL_URL}"
     
     row1 = [
@@ -376,14 +374,15 @@ def set_webhook_manual():
             return jsonify({"status": "ok", "message": f"Webhook set to {webhook_url}"}), 200
         else:
             return jsonify({"status": "error", "message": "Failed to set webhook"}), 500
-    except telebot.apihelper.ApiTelegramException as e:
+    except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     if request.headers.get("content-type") == "application/json":
         json_string = request.get_data(as_text=True)
-        update = telebot.types.Update.de_json(json_string)
+        # ИСПРАВЛЕНО
+        update = types.Update.de_json(json_string)
         bot.process_new_updates([update])
         return "OK", 200
     else:
@@ -402,7 +401,7 @@ if __name__ == "__main__":
         webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
         ok = bot.set_webhook(url=webhook_url)
         print(f"Webhook set -> {webhook_url} ; ok={ok}")
-    except telebot.apihelper.ApiTelegramException as e:
+    except Exception as e:
         print("Ошибка установки webhook:", e)
     
     init_db()

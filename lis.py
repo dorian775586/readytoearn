@@ -160,7 +160,7 @@ def on_my_booking(message: types.Message):
                 cur.execute("""
                     SELECT booking_id, table_id, time_slot, booking_for
                     FROM bookings
-                    WHERE user_id=%s AND (booking_for >= NOW() - INTERVAL '6 hours' OR DATE(booking_for) = CURRENT_DATE)
+                    WHERE user_id=%s AND (booking_for > NOW() OR DATE(booking_for) = CURRENT_DATE)
                     ORDER BY booked_at DESC
                     LIMIT 1;
                 """, (message.from_user.id,))

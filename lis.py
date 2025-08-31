@@ -1,14 +1,15 @@
 import os
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime, timedelta, date
 
-import telebot
-from telebot import types
+from flask import Flask, request, jsonify
+from telebot import TeleBot, types
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from flask import Flask, request, jsonify
 from flask_cors import CORS
-import baza
 
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
 
 # =========================
 # ENV
@@ -17,16 +18,18 @@ BOT_TOKEN = (os.environ.get("BOT_TOKEN") or "").strip()
 DATABASE_URL = (os.environ.get("DATABASE_URL") or "").strip()
 ADMIN_ID_ENV = (os.environ.get("ADMIN_ID") or "").strip()
 WEBAPP_URL = (os.environ.get("WEBAPP_URL") or "https://gitrepo-drab.vercel.app").strip()
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 
 if not BOT_TOKEN:
     raise RuntimeError("Ошибка: BOT_TOKEN пуст или не задан!")
 if not DATABASE_URL:
     raise RuntimeError("Ошибка: DATABASE_URL не задан!")
+if not RENDER_EXTERNAL_URL:
+    raise RuntimeError("Ошибка: RENDER_EXTERNAL_URL не задан! Проверьте переменные окружения на Render.")
+
 
 # Явно добавим порт, если вдруг в URL его нет
 if "render.com/" in DATABASE_URL and ":5432" not in DATABASE_URL:
-    # перед /dbname вставим :5432, если хоста без порта
-    # пример: ...render.com/whitefoxbd -> ...render.com:5432/whitefoxbd
     DATABASE_URL = DATABASE_URL.replace(".render.com/", ".render.com:5432/")
 
 ADMIN_ID = None
@@ -39,7 +42,7 @@ if ADMIN_ID_ENV:
 # =========================
 # BOT & APP
 # =========================
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+bot = TeleBot(BOT_TOKEN, parse_mode="HTML")
 app = Flask(__name__)
 CORS(app)
 
@@ -53,34 +56,30 @@ def init_db():
     try:
         with db_connect() as conn:
             with conn.cursor() as cur:
-                # Базовые таблицы
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS tables (
                     id INT PRIMARY KEY
                 );
                 """)
-                # ИСПРАВЛЕНО: используем TIMESTAMP для booking_for
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS bookings (
                     booking_id SERIAL PRIMARY KEY,
+                    user_id BIGINT,
+                    user_name VARCHAR(255),
+                    phone TEXT,
+                    guests INT,
                     table_id INT NOT NULL,
                     time_slot TEXT NOT NULL,
-                    booked_at TIMESTAMP NOT NULL,
-                    booking_for TIMESTAMP,
-                    phone TEXT,
-                    guests INT
+                    booked_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    booking_for TIMESTAMP
                 );
                 """)
-
-                # На случай старой схемы — добавим недостающие поля
+                cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS user_id BIGINT;")
+                cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS user_name TEXT;")
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS phone TEXT;")
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS guests INT;")
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_for TIMESTAMP;")
-                cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS user_id BIGINT;")
-                cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS user_name TEXT;")
 
-
-                # Наполним столики (если пусто)
                 cur.execute("SELECT COUNT(*) AS c FROM tables;")
                 c = cur.fetchone()["c"]
                 if c == 0:
@@ -91,15 +90,14 @@ def init_db():
     except Exception as e:
         print(f"Ошибка инициализации базы: {e}")
 
-
 # =========================
 # HELPERS (UI)
 # =========================
 def main_reply_kb(user_id: int, user_name: str) -> types.ReplyKeyboardMarkup:
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     
-    # 🌟 ИЗМЕНЕНО: теперь кнопка "Забронировать" будет передавать user_id и user_name
-    web_app_url = f"{WEBAPP_URL}?user_id={user_id}&user_name={user_name}"
+    # 🌟 ИЗМЕНЕНО: теперь кнопка "Забронировать" будет передавать user_id, user_name и bot_url
+    web_app_url = f"{WEBAPP_URL}?user_id={user_id}&user_name={user_name}&bot_url={RENDER_EXTERNAL_URL}"
     
     row1 = [
         types.KeyboardButton("🦊 Забронировать", web_app=types.WebAppInfo(url=web_app_url)),
@@ -108,7 +106,7 @@ def main_reply_kb(user_id: int, user_name: str) -> types.ReplyKeyboardMarkup:
     row2 = [types.KeyboardButton("📖 Меню")]
     kb.row(*row1)
     kb.row(*row2)
-    if ADMIN_ID and user_id == ADMIN_ID:
+    if ADMIN_ID and str(user_id) == str(ADMIN_ID):
         kb.row(types.KeyboardButton("🛠 Управление"), types.KeyboardButton("🗂 История"))
     return kb
 
@@ -123,12 +121,13 @@ def cmd_start(message: types.Message):
         message.chat.id,
         photo="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQbh6M8aJwxylo8aI1B-ceUHaiOyEnA425a0A&s",
         caption="<b>Рестобар «Белый Лис»</b> приветствует вас!\nТут вы можете дистанционно забронировать любой понравившийся столик!",
-        reply_markup=main_reply_kb(user_id, user_name)
+        reply_markup=main_reply_kb(user_id, user_name),
+        parse_mode="HTML"
     )
 
 @bot.message_handler(commands=["history"])
 def cmd_history(message: types.Message):
-    if not ADMIN_ID or message.chat.id != ADMIN_ID:
+    if not ADMIN_ID or str(message.chat.id) != str(ADMIN_ID):
         bot.send_message(message.chat.id, "У вас нет прав для этой команды.")
         return
     try:
@@ -146,7 +145,6 @@ def cmd_history(message: types.Message):
             return
         text = "<b>История бронирований (последние 50):</b>\n\n"
         for r in rows:
-            # ИСПРАВЛЕНО: формат даты
             booking_date = r['booking_for'].strftime("%d.%m.%Y")
             text += f"#{r['booking_id']} — {r['user_name']}, стол {r['table_id']}, {r['time_slot']}, {booking_date}\n"
         bot.send_message(message.chat.id, text)
@@ -161,11 +159,10 @@ def on_my_booking(message: types.Message):
     try:
         with db_connect() as conn:
             with conn.cursor() as cur:
-                # ИСПРАВЛЕНО: Ищем активные брони на текущий день ИЛИ будущие
                 cur.execute("""
                     SELECT booking_id, table_id, time_slot, booking_for
                     FROM bookings
-                    WHERE user_id=%s AND (booking_for > NOW() OR DATE(booking_for) = CURRENT_DATE)
+                    WHERE user_id=%s AND booking_for > NOW()
                     ORDER BY booked_at DESC
                     LIMIT 1;
                 """, (message.from_user.id,))
@@ -176,7 +173,6 @@ def on_my_booking(message: types.Message):
             bot.send_message(message.chat.id, "У вас нет активной брони.", reply_markup=main_reply_kb(user_id, user_name))
             return
         
-        # ИСПРАВЛЕНО: формат даты
         booking_date = row['booking_for'].strftime("%d.%m.%Y")
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton(text="❌ Отменить бронь", callback_data=f"cancel_{row['booking_id']}"))
@@ -186,7 +182,6 @@ def on_my_booking(message: types.Message):
 
 @bot.message_handler(func=lambda m: m.text == "📖 Меню")
 def on_menu(message: types.Message):
-    # Поставь реальные URL фото меню
     photos = [
         "https://example.com/menu1.jpg",
         "https://example.com/menu2.jpg",
@@ -194,16 +189,14 @@ def on_menu(message: types.Message):
     for url in photos:
         bot.send_photo(message.chat.id, photo=url)
 
-# Изменено: теперь эта кнопка показывает список броней с кнопками отмены
 @bot.message_handler(func=lambda m: m.text == "🛠 Управление")
 def on_admin_panel(message: types.Message):
-    if not ADMIN_ID or message.chat.id != ADMIN_ID:
+    if not ADMIN_ID or str(message.chat.id) != str(ADMIN_ID):
         bot.send_message(message.chat.id, "У вас нет прав для этой команды.")
         return
     try:
         with db_connect() as conn:
             with conn.cursor() as cur:
-                # Получаем все будущие бронирования
                 cur.execute("""
                     SELECT booking_id, user_name, table_id, time_slot, booking_for, phone
                     FROM bookings
@@ -216,12 +209,11 @@ def on_admin_panel(message: types.Message):
             return
         
         for r in rows:
-            # ИСПРАВЛЕНО: формат даты
             booking_date = r['booking_for'].strftime("%d.%m.%Y")
             text = f"🔖 Бронь #{r['booking_id']} — {r['user_name']}\n"
-            text += f"  - Стол: {r['table_id']}\n"
-            text += f"  - Время: {r['time_slot']} ({booking_date})\n"
-            text += f"  - Телефон: {r['phone']}\n"
+            text += f"  - Стол: {r['table_id']}\n"
+            text += f"  - Время: {r['time_slot']} ({booking_date})\n"
+            text += f"  - Телефон: {r['phone']}\n"
             
             kb = types.InlineKeyboardMarkup()
             kb.add(types.InlineKeyboardButton(text="❌ Отменить", callback_data=f"admin_cancel_{r['booking_id']}"))
@@ -232,7 +224,6 @@ def on_admin_panel(message: types.Message):
 
 @bot.message_handler(func=lambda m: m.text == "🗂 История")
 def on_history_btn(message: types.Message):
-    # то же, что и /history
     return cmd_history(message)
 
 # =========================
@@ -250,11 +241,10 @@ def on_cancel_user(call: types.CallbackQuery):
     except Exception as e:
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
 
-# Добавлен новый обработчик для админской отмены
 @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_cancel_"))
 def on_cancel_admin(call: types.CallbackQuery):
     booking_id = int(call.data.split("_")[2])
-    if not ADMIN_ID or call.from_user.id != ADMIN_ID:
+    if not ADMIN_ID or str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "У вас нет прав для этого действия.", show_alert=True)
         return
     try:
@@ -273,19 +263,14 @@ def on_cancel_admin(call: types.CallbackQuery):
 @bot.message_handler(content_types=['web_app_data'])
 def on_webapp_data(message: types.Message):
     print("ПРИШЛИ ДАННЫЕ ОТ WEBAPP:", message.web_app_data.data)
-    bot.send_message(message.chat.id, "Данные получены, бронирование пока тестовое.")
-
 
 # =========================
 # BOOKING API (для WebApp / внешних вызовов)
 # =========================
 @app.route("/book", methods=["POST"])
 def book_api():
-    """Обработчик POST-запросов с данными из Web App"""
     try:
-        # Получаем данные из запроса
         data = request.json
-        # Если user_id/user_name пустые, присваиваем им значения по умолчанию
         user_id = data.get('user_id') or 0
         user_name = data.get('user_name') or 'Неизвестный'
         phone = data.get('phone')
@@ -294,18 +279,14 @@ def book_api():
         time_slot = data.get('time')
         date_str = data.get('date')
 
-        # Проверяем только те поля, которые всегда должны быть
         if not all([phone, guests, table_id, time_slot, date_str]):
             return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
 
-        # Парсим дату и время для корректного формата PostgreSQL
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         booking_datetime = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
 
-        # Соединяемся с базой
         conn = psycopg2.connect(DATABASE_URL)
 
-        # ИСПРАВЛЕННАЯ ПРОВЕРКА НА СУЩЕСТВОВАНИЕ БРОНИ (используем booking_for)
         with conn.cursor() as cursor:
             cursor.execute(
                 "SELECT 1 FROM bookings WHERE table_id = %s AND booking_for::date = %s AND time_slot = %s;",
@@ -315,7 +296,6 @@ def book_api():
             if existing_booking:
                 return {"status": "error", "message": "Этот стол уже забронирован на это время."}, 409
         
-        # Записываем бронирование в базу
         with conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -326,24 +306,36 @@ def book_api():
             )
             conn.commit()
 
-        # уведомляем админа
         if ADMIN_ID:
             try:
-                # ИЗМЕНЕНО: добавлена дата бронирования в уведомление
                 formatted_date = booking_date.strftime("%d.%m.%Y")
-                bot.send_message(ADMIN_ID, f"Новая бронь (через API):\nПользователь: {user_name}\nСтол: {table_id}\nВремя: {time_slot}\nДата: {formatted_date}\nГостей: {guests}\nТелефон: {phone}")
+                if user_id:
+                    user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>'
+                else:
+                    user_link = user_name
+                
+                message_text = (
+                    f"Новая бронь:\n"
+                    f"Пользователь: {user_link}\n"
+                    f"Стол: {table_id}\n"
+                    f"Дата: {formatted_date}\n"
+                    f"Время: {time_slot}\n"
+                    f"Гостей: {guests}\n"
+                    f"Телефон: {phone}"
+                )
+                
+                bot.send_message(ADMIN_ID, message_text, parse_mode="HTML")
             except Exception as e:
                 print("Не удалось отправить сообщение админу:", e)
 
         return {"status": "ok", "message": "Бронь успешно создана"}, 200
 
     except Exception as e:
-        print("Ошибка /book:", e)
+        logging.error(f"Ошибка /book: {e}")
         return {"status": "error", "message": str(e)}, 400
 
 @app.route("/get_booked_times", methods=["GET"])
 def get_booked_times():
-    """Возвращает список занятых временных слотов для стола и даты"""
     try:
         table_id = request.args.get('table')
         date_str = request.args.get('date')
@@ -351,10 +343,8 @@ def get_booked_times():
         if not all([table_id, date_str]):
             return {"status": "error", "message": "Не хватает данных (стол или дата)"}, 400
 
-        # Соединяемся с базой
         conn = psycopg2.connect(DATABASE_URL)
         
-        # ИСПРАВЛЕННЫЙ ЗАПРОС (используем booking_for)
         with conn.cursor() as cursor:
             cursor.execute(
                 "SELECT time_slot FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
@@ -365,25 +355,21 @@ def get_booked_times():
         return {"status": "ok", "booked_times": booked_times}, 200
 
     except Exception as e:
-        print("Ошибка /get_booked_times:", e)
+        logging.error(f"Ошибка /get_booked_times: {e}")
         return {"status": "error", "message": str(e)}, 400
 
-# =========================
-# НОВЫЕ МАРШРУТЫ ДЛЯ ОТЛАДКИ
-# =========================
 @app.route("/")
 def index():
     return "Bot is running.", 200
 
 @app.route("/set_webhook_manual")
 def set_webhook_manual():
-    external_url = (os.environ.get("RENDER_EXTERNAL_URL") or "").strip()
-    if not external_url:
+    if not RENDER_EXTERNAL_URL:
         return jsonify({"status": "error", "message": "RENDER_EXTERNAL_URL is not set"}), 500
-    if not external_url.startswith("https://"):
+    if not RENDER_EXTERNAL_URL.startswith("https://"):
         return jsonify({"status": "error", "message": "Webhook requires HTTPS"}), 500
     
-    webhook_url = f"{external_url}/webhook"
+    webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
     try:
         ok = bot.set_webhook(url=webhook_url)
         if ok:
@@ -393,12 +379,8 @@ def set_webhook_manual():
     except telebot.apihelper.ApiTelegramException as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# =========================
-# TELEGRAM WEBHOOK ROUTE
-# =========================
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """Обработчик обновлений, приходящих от Telegram"""
     if request.headers.get("content-type") == "application/json":
         json_string = request.get_data(as_text=True)
         update = telebot.types.Update.de_json(json_string)
@@ -408,24 +390,20 @@ def webhook():
         return "Invalid content type", 403
 
 
-# =========================
-# MAIN / WEBHOOK SETUP
-# =========================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    external_url = (os.environ.get("RENDER_EXTERNAL_URL") or "").strip()
-    if not external_url:
+    if not RENDER_EXTERNAL_URL:
         raise RuntimeError("Ошибка: RENDER_EXTERNAL_URL пуст или не задан!")
-    if not external_url.startswith("https://"):
+    if not RENDER_EXTERNAL_URL.startswith("https://"):
         raise RuntimeError("Ошибка: Telegram webhook требует HTTPS!")
 
-    # Ставим webhook на /webhook
     try:
         bot.remove_webhook()
-        webhook_url = f"{external_url}/webhook"
+        webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
         ok = bot.set_webhook(url=webhook_url)
         print(f"Webhook set -> {webhook_url} ; ok={ok}")
     except telebot.apihelper.ApiTelegramException as e:
         print("Ошибка установки webhook:", e)
-
+    
+    init_db()
     app.run(host="0.0.0.0", port=port)

@@ -95,11 +95,11 @@ def init_db():
 # =========================
 # HELPERS (UI)
 # =========================
-def main_reply_kb(user_id: int) -> types.ReplyKeyboardMarkup:
+def main_reply_kb(user_id: int, user_name: str) -> types.ReplyKeyboardMarkup:
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     
     # 🌟 ИЗМЕНЕНО: теперь кнопка "Забронировать" будет передавать user_id и user_name
-    web_app_url = f"{WEBAPP_URL}?user_id={user_id}&user_name={bot.get_chat(user_id).full_name}"
+    web_app_url = f"{WEBAPP_URL}?user_id={user_id}&user_name={user_name}"
     
     row1 = [
         types.KeyboardButton("🦊 Забронировать", web_app=types.WebAppInfo(url=web_app_url)),
@@ -117,11 +117,13 @@ def main_reply_kb(user_id: int) -> types.ReplyKeyboardMarkup:
 # =========================
 @bot.message_handler(commands=["start"])
 def cmd_start(message: types.Message):
+    user_id = message.from_user.id
+    user_name = message.from_user.full_name or "Неизвестный"
     bot.send_photo(
         message.chat.id,
         photo="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQbh6M8aJwxylo8aI1B-ceUHaiOyEnA425a0A&s",
         caption="<b>Рестобар «Белый Лис»</b> приветствует вас!\nТут вы можете дистанционно забронировать любой понравившийся столик!",
-        reply_markup=main_reply_kb(message.from_user.id)
+        reply_markup=main_reply_kb(user_id, user_name)
     )
 
 @bot.message_handler(commands=["history"])
@@ -169,7 +171,9 @@ def on_my_booking(message: types.Message):
                 """, (message.from_user.id,))
                 row = cur.fetchone()
         if not row:
-            bot.send_message(message.chat.id, "У вас нет активной брони.", reply_markup=main_reply_kb(message.from_user.id))
+            user_id = message.from_user.id
+            user_name = message.from_user.full_name or "Неизвестный"
+            bot.send_message(message.chat.id, "У вас нет активной брони.", reply_markup=main_reply_kb(user_id, user_name))
             return
         
         # ИСПРАВЛЕНО: формат даты

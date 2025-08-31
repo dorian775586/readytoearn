@@ -97,9 +97,12 @@ def init_db():
 # =========================
 def main_reply_kb(user_id: int) -> types.ReplyKeyboardMarkup:
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    
+    # 🌟 ИЗМЕНЕНО: теперь кнопка "Забронировать" будет передавать user_id и user_name
+    web_app_url = f"{WEBAPP_URL}?user_id={user_id}&user_name={bot.get_chat(user_id).full_name}"
+    
     row1 = [
-        # Изменено: теперь эта кнопка открывает веб-приложение
-        types.KeyboardButton("🦊 Забронировать", web_app=types.WebAppInfo(url=WEBAPP_URL)),
+        types.KeyboardButton("🦊 Забронировать", web_app=types.WebAppInfo(url=web_app_url)),
         types.KeyboardButton("📋 Моя бронь"),
     ]
     row2 = [types.KeyboardButton("📖 Меню")]

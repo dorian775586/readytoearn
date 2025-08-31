@@ -23,7 +23,7 @@ if not BOT_TOKEN:
 if not DATABASE_URL:
     raise RuntimeError("Ошибка: DATABASE_URL не задан!")
 
-# Явно добавим порт, если вдруг в URL его нет
+# Явноо добавим порт, если вдруг в URL его нет
 if "render.com/" in DATABASE_URL and ":5432" not in DATABASE_URL:
     # перед /dbname вставим :5432, если хоста без порта
     # пример: ...render.com/whitefoxbd -> ...render.com:5432/whitefoxbd

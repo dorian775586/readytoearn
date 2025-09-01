@@ -181,11 +181,16 @@ def on_my_booking(message: types.Message):
 @bot.message_handler(func=lambda m: m.text == "📖 Меню")
 def on_menu(message: types.Message):
     photos = [
-        "https://example.com/menu1.jpg",
-        "https://example.com/menu2.jpg",
+        types.InputMediaPhoto(open("image_e61ebc.png", "rb"), caption="Меню, страница 1"),
+        types.InputMediaPhoto(open("image_d5dc7a.png", "rb"), caption="Меню, страница 2"),
+        types.InputMediaPhoto(open("image_d5dbdf.png", "rb"), caption="Меню, страница 3")
     ]
-    for url in photos:
-        bot.send_photo(message.chat.id, photo=url)
+    try:
+        bot.send_media_group(message.chat.id, photos)
+    except Exception as e:
+        bot.send_message(message.chat.id, "Не удалось загрузить меню. Пожалуйста, попробуйте позже.")
+        logging.error(f"Ошибка при отправке медиагруппы: {e}")
+
 
 @bot.message_handler(func=lambda m: m.text == "🛠 Управление")
 def on_admin_panel(message: types.Message):
@@ -248,14 +253,13 @@ def on_cancel_admin(call: types.CallbackQuery):
     try:
         with db_connect() as conn:
             with conn.cursor() as cur:
-                # Получаем данные о брони до её удаления
+                booking_info = None
                 cur.execute("SELECT user_id, table_id, time_slot, booking_for FROM bookings WHERE booking_id=%s;", (booking_id,))
                 booking_info = cur.fetchone()
 
                 cur.execute("DELETE FROM bookings WHERE booking_id=%s;", (booking_id,))
                 conn.commit()
         
-        # Уведомляем пользователя об отмене
         if booking_info:
             user_id = booking_info['user_id']
             booking_date = booking_info['booking_for'].strftime("%d.%m.%Y")
@@ -319,7 +323,6 @@ def book_api():
             )
             conn.commit()
             
-        # УВЕДОМЛЕНИЕ ПОЛЬЗОВАТЕЛЯ
         try:
             formatted_date = booking_date.strftime("%d.%m.%Y")
             message_text = f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}"

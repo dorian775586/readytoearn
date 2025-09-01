@@ -180,10 +180,10 @@ def on_my_booking(message: types.Message):
 
 @bot.message_handler(func=lambda m: m.text == "📖 Меню")
 def on_menu(message: types.Message):
+    # Исправленный путь к файлам!
     photos = [
-        types.InputMediaPhoto(open("image_e61ebc.png", "rb"), caption="Меню, страница 1"),
-        types.InputMediaPhoto(open("image_d5dc7a.png", "rb"), caption="Меню, страница 2"),
-        types.InputMediaPhoto(open("image_d5dbdf.png", "rb"), caption="Меню, страница 3")
+        types.InputMediaPhoto(open("media/image_d5dbdf.png", "rb"), caption="Меню, страница 1"),
+        types.InputMediaPhoto(open("media/image_d5dc7a.png", "rb"), caption="Меню, страница 2"),
     ]
     try:
         bot.send_media_group(message.chat.id, photos)

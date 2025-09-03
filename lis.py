@@ -180,16 +180,26 @@ def on_my_booking(message: types.Message):
 
 @bot.message_handler(func=lambda m: m.text == "📖 Меню")
 def on_menu(message: types.Message):
-    # Исправленный путь к файлам!
-    photos = [
-        types.InputMediaPhoto(open("media/image_d5dbdf.png", "rb"), caption="Меню, страница 1"),
-        types.InputMediaPhoto(open("media/image_d5dc7a.png", "rb"), caption="Меню, страница 2"),
+    menu_photos = [
+        "https://gitrepo-drab.vercel.app/images/menu1.jpg",
+        "https://gitrepo-drab.vercel.app/images/menu2.jpg",
+        "https://gitrepo-drab.vercel.app/images/menu3.jpg",
+        "https://gitrepo-drab.vercel.app/images/menu4.jpg",
+        "https://gitrepo-drab.vercel.app/images/menu5.jpg",
+        "https://gitrepo-drab.vercel.app/images/menu6.jpg"
     ]
-    try:
-        bot.send_media_group(message.chat.id, photos)
-    except Exception as e:
-        bot.send_message(message.chat.id, "Не удалось загрузить меню. Пожалуйста, попробуйте позже.")
-        logging.error(f"Ошибка при отправке медиагруппы: {e}")
+    
+    bot.send_message(message.chat.id, "Загружаю меню, подождите...")
+
+    for photo_url in menu_photos:
+        try:
+            bot.send_photo(
+                message.chat.id,
+                photo=photo_url
+            )
+        except Exception as e:
+            bot.send_message(message.chat.id, f"Произошла ошибка при загрузке фото: {e}")
+            logging.error(f"Ошибка при отправке фото: {e}")
 
 
 @bot.message_handler(func=lambda m: m.text == "🛠 Управление")

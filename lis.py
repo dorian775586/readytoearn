@@ -49,8 +49,8 @@ CORS(app)
 # DB INIT
 # =========================
 def db_connect():
-    # Добавление параметра sslmode='require' для принудительного использования SSL
-    return psycopg2.connect(
+ # Добавление параметра sslmode='require' для принудительного использования SSL
+ return psycopg2.connect(
         DATABASE_URL, 
         cursor_factory=RealDictCursor,
         sslmode='require' 

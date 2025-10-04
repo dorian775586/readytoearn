@@ -25,8 +25,13 @@ if not BOT_TOKEN:
 if not DATABASE_URL:
     raise RuntimeError("Ошибка: DATABASE_URL не задан!")
 if not RENDER_EXTERNAL_URL:
-    # Важно для корректной работы Webhook
     raise RuntimeError("Ошибка: RENDER_EXTERNAL_URL не задан! Проверьте переменные окружения на Render.")
+
+# 🚨 Убедимся, что все важные URL/токены очищены от пробелов
+if RENDER_EXTERNAL_URL:
+    RENDER_EXTERNAL_URL = RENDER_EXTERNAL_URL.strip()
+if WEBAPP_URL:
+    WEBAPP_URL = WEBAPP_URL.strip()
 
 
 if "render.com/" in DATABASE_URL and ":5432" not in DATABASE_URL:
@@ -102,8 +107,16 @@ def init_db():
 def main_reply_kb(user_id: int, user_name: str) -> types.ReplyKeyboardMarkup:
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     
-    # ВАЖНО: WEBAPP_URL используется для главной страницы (index.html), RENDER_EXTERNAL_URL - для API
-    web_app_url = f"{WEBAPP_URL}?user_id={user_id}&user_name={user_name}&bot_url={RENDER_EXTERNAL_URL}"
+    # 🚨 ВОЗВРАЩАЕМ VERCEL-АДРЕС
+    cleaned_webapp_url = WEBAPP_URL.rstrip('/') # Убедимся, что нет завершающего слэша
+    
+    # Формируем URL с параметрами для Vercel-приложения
+    web_app_url = (
+        f"{cleaned_webapp_url}?user_id={user_id}&user_name={user_name}&bot_url={RENDER_EXTERNAL_URL}"
+    )
+    
+    # 🚨 DEBUG: Выводим финальный URL в логи для проверки
+    print(f"DEBUG: WebApp URL, отправляемый в Telegram: {web_app_url}")
     
     row1 = [
         types.KeyboardButton("🦊 Забронировать", web_app=types.WebAppInfo(url=web_app_url)),
@@ -124,11 +137,11 @@ def cmd_start(message: types.Message):
     user_id = message.from_user.id
     user_name = message.from_user.full_name or "Неизвестный"
     
-    # >>>>> ИЗМЕНЕНИЕ: ДОБАВЛЕН БЛОК TRY/EXCEPT ДЛЯ ДИАГНОСТИКИ ОШИБКИ С PHOTO <<<<<
+    # >>>>> ДОБАВЛЕН БЛОК TRY/EXCEPT ДЛЯ ДИАГНОСТИКИ ОШИБКИ С PHOTO ИЛИ BUTTON <<<<<
     try:
         bot.send_photo(
             message.chat.id,
-            # ВНИМАНИЕ: Если бот не отвечает, проблема, скорее всего, в этой ссылке.
+            # ВНИМАНИЕ: Если бот не отвечает, проблема, скорее всего, в этой ссылке или кнопке
             photo="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQbh6M8aJwxylo8aI1B-ceUHaiOyEnA425a0A&s",
             caption="<b>Рестобар «Белый Лис»</b> приветствует вас!\nТут вы можете дистанционно забронировать любой понравившийся столик!",
             reply_markup=main_reply_kb(user_id, user_name),
@@ -140,11 +153,11 @@ def cmd_start(message: types.Message):
         # Логируем ошибку, чтобы увидеть ее в логах Render
         logging.error(f"ОШИБКА В CMD_START для user {user_id}: {e}")
         
-        # Попытка отправить текстовое сообщение на случай, если фото не работает
+        # Попытка отправить текстовое сообщение на случай, если фото/кнопка не работает
         try:
             bot.send_message(
                 message.chat.id,
-                text="⚠️ Бот не смог загрузить фотографию, но работает.\n\n"
+                text="⚠️ Проблема с загрузкой меню. Бот работает.\n\n"
                      "<b>Рестобар «Белый Лис»</b> приветствует вас!\n"
                      "Чтобы забронировать столик, нажмите на кнопку 'Забронировать'.",
                 reply_markup=main_reply_kb(user_id, user_name),

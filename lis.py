@@ -25,6 +25,7 @@ if not BOT_TOKEN:
 if not DATABASE_URL:
     raise RuntimeError("Ошибка: DATABASE_URL не задан!")
 if not RENDER_EXTERNAL_URL:
+    # Важно для корректной работы Webhook
     raise RuntimeError("Ошибка: RENDER_EXTERNAL_URL не задан! Проверьте переменные окружения на Render.")
 
 
@@ -49,8 +50,8 @@ CORS(app)
 # DB INIT
 # =========================
 def db_connect():
- # Добавление параметра sslmode='require' для принудительного использования SSL
- return psycopg2.connect(
+    # Добавление параметра sslmode='require' для принудительного использования SSL
+    return psycopg2.connect(
         DATABASE_URL, 
         cursor_factory=RealDictCursor,
         sslmode='require' 
@@ -87,6 +88,7 @@ def init_db():
                 cur.execute("SELECT COUNT(*) AS c FROM tables;")
                 c = cur.fetchone()["c"]
                 if c == 0:
+                    # Вставляем столы с ID 1 по 10
                     cur.execute("INSERT INTO tables (id) SELECT generate_series(1, 10);")
 
             conn.commit()
@@ -100,6 +102,7 @@ def init_db():
 def main_reply_kb(user_id: int, user_name: str) -> types.ReplyKeyboardMarkup:
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     
+    # ВАЖНО: WEBAPP_URL используется для главной страницы (index.html), RENDER_EXTERNAL_URL - для API
     web_app_url = f"{WEBAPP_URL}?user_id={user_id}&user_name={user_name}&bot_url={RENDER_EXTERNAL_URL}"
     
     row1 = [
@@ -120,13 +123,42 @@ def main_reply_kb(user_id: int, user_name: str) -> types.ReplyKeyboardMarkup:
 def cmd_start(message: types.Message):
     user_id = message.from_user.id
     user_name = message.from_user.full_name or "Неизвестный"
-    bot.send_photo(
-        message.chat.id,
-        photo="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQbh6M8aJwxylo8aI1B-ceUHaiOyEnA425a0A&s",
-        caption="<b>Рестобар «Белый Лис»</b> приветствует вас!\nТут вы можете дистанционно забронировать любой понравившийся столик!",
-        reply_markup=main_reply_kb(user_id, user_name),
-        parse_mode="HTML"
-    )
+    
+    # >>>>> ИЗМЕНЕНИЕ: ДОБАВЛЕН БЛОК TRY/EXCEPT ДЛЯ ДИАГНОСТИКИ ОШИБКИ С PHOTO <<<<<
+    try:
+        bot.send_photo(
+            message.chat.id,
+            # ВНИМАНИЕ: Если бот не отвечает, проблема, скорее всего, в этой ссылке.
+            photo="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQbh6M8aJwxylo8aI1B-ceUHaiOyEnA425a0A&s",
+            caption="<b>Рестобар «Белый Лис»</b> приветствует вас!\nТут вы можете дистанционно забронировать любой понравившийся столик!",
+            reply_markup=main_reply_kb(user_id, user_name),
+            parse_mode="HTML"
+        )
+        print(f"*** УСПЕШНО ОТПРАВЛЕНО /START ПОЛЬЗОВАТЕЛЮ {user_id} ***")
+
+    except Exception as e:
+        # Логируем ошибку, чтобы увидеть ее в логах Render
+        logging.error(f"ОШИБКА В CMD_START для user {user_id}: {e}")
+        
+        # Попытка отправить текстовое сообщение на случай, если фото не работает
+        try:
+            bot.send_message(
+                message.chat.id,
+                text="⚠️ Бот не смог загрузить фотографию, но работает.\n\n"
+                     "<b>Рестобар «Белый Лис»</b> приветствует вас!\n"
+                     "Чтобы забронировать столик, нажмите на кнопку 'Забронировать'.",
+                reply_markup=main_reply_kb(user_id, user_name),
+                parse_mode="HTML"
+            )
+            print(f"*** УСПЕШНО ОТПРАВЛЕНО ТЕКСТОВОЕ СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЮ {user_id} ***")
+        except Exception as text_e:
+            # Критическая ошибка
+            logging.error(f"КРИТИЧЕСКАЯ ОШИБКА ОТПРАВКИ ОТВЕТА ПОЛЬЗОВАТЕЛЮ {user_id}: {text_e}")
+            
+# =========================
+# КОНЕЦ ИЗМЕНЕНИЙ В COMMANDS
+# =========================
+
 
 @bot.message_handler(commands=["history"])
 def cmd_history(message: types.Message):
@@ -317,57 +349,61 @@ def book_api():
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         booking_datetime = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
 
-        conn = psycopg2.connect(DATABASE_URL)
-
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT 1 FROM bookings WHERE table_id = %s AND booking_for::date = %s AND time_slot = %s;",
-                (table_id, booking_date, time_slot)
-            )
-            existing_booking = cursor.fetchone()
-            if existing_booking:
-                return {"status": "error", "message": "Этот стол уже забронирован на это время."}, 409
-        
-        with conn.cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
-                """,
-                (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(), booking_datetime)
-            )
-            conn.commit()
+        # Использование db_connect() вместо прямого вызова psycopg2.connect
+        with db_connect() as conn:
+            with conn.cursor() as cursor:
+                # Проверка на дублирование брони
+                cursor.execute(
+                    "SELECT 1 FROM bookings WHERE table_id = %s AND booking_for::date = %s AND time_slot = %s;",
+                    (table_id, booking_date, time_slot)
+                )
+                existing_booking = cursor.fetchone()
+                if existing_booking:
+                    return {"status": "error", "message": "Этот стол уже забронирован на это время."}, 409
             
-        try:
-            formatted_date = booking_date.strftime("%d.%m.%Y")
-            message_text = f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}"
-            bot.send_message(user_id, message_text)
-        except Exception as e:
-            print(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
-
-        if ADMIN_ID:
+            with conn.cursor() as cursor:
+                # Создание брони
+                cursor.execute(
+                    """
+                    INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                    """,
+                    (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(), booking_datetime)
+                )
+                conn.commit()
+                
+            # Уведомление пользователя
             try:
                 formatted_date = booking_date.strftime("%d.%m.%Y")
-                if user_id:
-                    user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>'
-                else:
-                    user_link = user_name
-                
-                message_text = (
-                    f"Новая бронь:\n"
-                    f"Пользователь: {user_link}\n"
-                    f"Стол: {table_id}\n"
-                    f"Дата: {formatted_date}\n"
-                    f"Время: {time_slot}\n"
-                    f"Гостей: {guests}\n"
-                    f"Телефон: {phone}"
-                )
-                
-                bot.send_message(ADMIN_ID, message_text, parse_mode="HTML")
+                message_text = f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}"
+                bot.send_message(user_id, message_text)
             except Exception as e:
-                print("Не удалось отправить сообщение админу:", e)
+                print(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
 
-        return {"status": "ok", "message": "Бронь успешно создана"}, 200
+            # Уведомление админа
+            if ADMIN_ID:
+                try:
+                    formatted_date = booking_date.strftime("%d.%m.%Y")
+                    if user_id:
+                        user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>'
+                    else:
+                        user_link = user_name
+                    
+                    message_text = (
+                        f"Новая бронь:\n"
+                        f"Пользователь: {user_link}\n"
+                        f"Стол: {table_id}\n"
+                        f"Дата: {formatted_date}\n"
+                        f"Время: {time_slot}\n"
+                        f"Гостей: {guests}\n"
+                        f"Телефон: {phone}"
+                    )
+                    
+                    bot.send_message(ADMIN_ID, message_text, parse_mode="HTML")
+                except Exception as e:
+                    print("Не удалось отправить сообщение админу:", e)
+
+            return {"status": "ok", "message": "Бронь успешно создана"}, 200
 
     except Exception as e:
         logging.error(f"Ошибка /book: {e}")
@@ -382,14 +418,14 @@ def get_booked_times():
         if not all([table_id, date_str]):
             return {"status": "error", "message": "Не хватает данных (стол или дата)"}, 400
 
-        conn = psycopg2.connect(DATABASE_URL)
-        
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT time_slot FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
-                (table_id, date_str)
-            )
-            booked_times = [row[0] for row in cursor.fetchall()]
+        # Использование db_connect() вместо прямого вызова psycopg2.connect
+        with db_connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT time_slot FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
+                    (table_id, date_str)
+                )
+                booked_times = [row[0] for row in cursor.fetchall()]
         
         return {"status": "ok", "booked_times": booked_times}, 200
 
@@ -423,8 +459,16 @@ def webhook():
     if request.headers.get("content-type") == "application/json":
         json_string = request.get_data(as_text=True)
         update = types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return "OK", 200
+        
+        # Обработка обновления от Telegram
+        try:
+            bot.process_new_updates([update])
+            return "OK", 200
+        except Exception as e:
+            # Логируем ошибку, если Telebot упал, но Flask все равно возвращает 200
+            logging.error(f"Ошибка при обработке обновления Telebot: {e}")
+            return "OK", 200 # Возвращаем 200, чтобы Telegram не спамил обновлениями
+
     else:
         return "Invalid content type", 403
 
@@ -437,6 +481,7 @@ if __name__ == "__main__":
         raise RuntimeError("Ошибка: Telegram webhook требует HTTPS!")
 
     try:
+        # Устанавливаем Webhook при запуске
         bot.remove_webhook()
         webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
         ok = bot.set_webhook(url=webhook_url)

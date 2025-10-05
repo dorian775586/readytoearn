@@ -25,6 +25,7 @@ if not BOT_TOKEN:
 if not DATABASE_URL:
     raise RuntimeError("Ошибка: DATABASE_URL не задан!")
 if not RENDER_EXTERNAL_URL:
+    # Важно: RENDER_EXTERNAL_URL должна быть задана в переменных окружения Render!
     raise RuntimeError("Ошибка: RENDER_EXTERNAL_URL не задан! Проверьте переменные окружения на Render.")
 
 # Очистка и нормализация URL/токенов
@@ -199,7 +200,8 @@ def on_my_booking(message: types.Message):
                 cur.execute("""
                     SELECT booking_id, table_id, time_slot, booking_for
                     FROM bookings
-                    WHERE user_id=%s AND booking_for > NOW()
+                    WHERE user_id=%s 
+                      AND (booking_for + interval '1 hour') > NOW()
                     ORDER BY booked_at DESC
                     LIMIT 1;
                 """, (message.from_user.id,))
@@ -252,7 +254,7 @@ def on_admin_panel(message: types.Message):
                 cur.execute("""
                     SELECT booking_id, user_name, table_id, time_slot, booking_for, phone
                     FROM bookings
-                    WHERE booking_for > NOW()
+                    WHERE (booking_for + interval '1 hour') > NOW()
                     ORDER BY booking_for ASC;
                 """)
                 rows = cur.fetchall()
@@ -269,7 +271,7 @@ def on_admin_panel(message: types.Message):
             
             kb = types.InlineKeyboardMarkup()
             kb.add(types.InlineKeyboardButton(text="❌ Отменить", callback_data=f"admin_cancel_{r['booking_id']}"))
-            bot.send_message(message.chat.id, text, reply_markup=kb)
+            bot.send_message(message.chat.id, text, reply_markup=kb, parse_mode="HTML")
 
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка админ-панели: {e}")
@@ -312,7 +314,6 @@ def on_cancel_admin(call: types.CallbackQuery):
         if booking_info:
             user_id = booking_info.get('user_id')
             
-            # ⬇️ ИСПРАВЛЕНИЕ 2: Проверяем, что user_id валиден (не 0 и не None) перед отправкой
             if user_id:
                 booking_date = booking_info['booking_for'].strftime("%d.%m.%Y")
                 message_text = f"❌ Ваша бронь отменена администратором.\n\nСтол: {booking_info['table_id']}\nДата: {booking_date}\nВремя: {booking_info['time_slot']}"
@@ -341,7 +342,7 @@ def book_api():
     try:
         data = request.json
         user_id_raw = data.get('user_id')
-        user_id = int(user_id_raw) if user_id_raw else 0 # Сохраняем 0 для базы, если не пришел
+        user_id = int(user_id_raw) if user_id_raw else 0
         user_name = data.get('user_name') or 'Неизвестный'
         phone = data.get('phone')
         guests = data.get('guests')
@@ -373,13 +374,11 @@ def book_api():
                     INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
                     """,
-                    # ⬇️ ИСПРАВЛЕНИЕ 1: Добавлен time_slot, чтобы соответствовать 8 плейсхолдерам в SQL-запросе
                     (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(), booking_datetime) 
                 )
                 conn.commit()
                 
             # 3. Уведомление пользователя
-            # ⬇️ ИСПРАВЛЕНИЕ 2: Проверяем, что ID валиден (не 0) перед отправкой
             if user_id: 
                 try:
                     formatted_date = booking_date.strftime("%d.%m.%Y")
@@ -423,20 +422,73 @@ def get_booked_times():
         if not all([table_id, date_str]):
             return {"status": "error", "message": "Не хватает данных (стол или дата)"}, 400
 
+        # Убедимся, что дата корректна
+        datetime.strptime(date_str, '%Y-%m-%d')
+        
         with db_connect() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT time_slot FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
+                    """
+                    SELECT time_slot FROM bookings 
+                    WHERE table_id = %s 
+                      AND booking_for::date = %s 
+                      AND (booking_for + interval '1 hour') > NOW(); 
+                    """, 
                     (table_id, date_str)
                 )
-                # ⬇️ ИСПРАВЛЕНИЕ 3: Используем 'time_slot' для доступа к полю (т.к. используется RealDictCursor)
                 booked_times = [row['time_slot'] for row in cursor.fetchall()]
         
         return {"status": "ok", "booked_times": booked_times}, 200
 
+    except ValueError:
+        return {"status": "error", "message": "Неверный формат даты."}, 400
     except Exception as e:
         logging.error(f"Ошибка /get_booked_times: {e}") 
         return {"status": "error", "message": str(e)}, 400
+
+
+# 🔥🔥🔥 ДОБАВЛЕН НЕДОСТАЮЩИЙ МАРШРУТ 🔥🔥🔥
+@app.route("/get_booked_tables", methods=["GET"])
+def get_booked_tables():
+    """
+    Возвращает список table_id, которые заняты на указанную дату и время.
+    """
+    try:
+        date_str = request.args.get('date')
+        time_slot = request.args.get('time')
+
+        if not all([date_str, time_slot]):
+            return jsonify({"status": "error", "message": "Не хватает данных (дата или время)"}), 400
+        
+        # Проверка валидности данных
+        datetime.strptime(date_str, '%Y-%m-%d')
+        datetime.strptime(time_slot, '%H:%M')
+
+        with db_connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT DISTINCT table_id FROM bookings 
+                    WHERE booking_for::date = %s 
+                      AND time_slot = %s
+                      AND (booking_for + interval '1 hour') > NOW(); 
+                    """,
+                    (date_str, time_slot)
+                )
+                
+                # Собираем список ID занятых столов
+                booked_tables = [str(row['table_id']) for row in cursor.fetchall()]
+        
+        print(f"DEBUG /get_booked_tables: Date={date_str}, Time={time_slot}, Booked={booked_tables}")
+        return jsonify({"status": "ok", "booked_tables": booked_tables}), 200
+
+    except ValueError:
+        return jsonify({"status": "error", "message": "Неверный формат даты или времени."}), 400
+    except Exception as e:
+        logging.error(f"Ошибка /get_booked_tables: {e}") 
+        return jsonify({"status": "error", "message": "Внутренняя ошибка сервера."}), 500
+# 🔥🔥🔥 КОНЕЦ ДОБАВЛЕННОГО МАРШРУТА 🔥🔥🔥
+
 
 @app.route("/")
 def index():

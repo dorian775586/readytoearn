@@ -25,7 +25,6 @@ if not BOT_TOKEN:
 if not DATABASE_URL:
     raise RuntimeError("Ошибка: DATABASE_URL не задан!")
 if not RENDER_EXTERNAL_URL:
-    # Важно: RENDER_EXTERNAL_URL должна быть задана в переменных окружения Render!
     raise RuntimeError("Ошибка: RENDER_EXTERNAL_URL не задан! Проверьте переменные окружения на Render.")
 
 # Очистка и нормализация URL/токенов
@@ -341,18 +340,40 @@ def on_webapp_data(message: types.Message):
 def book_api():
     try:
         data = request.json
+        
+        # --- ДОБАВЛЕНО ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ---
+        logging.info(f"API /book received data: {data}")
+        # ---------------------------------------
+        
         user_id_raw = data.get('user_id')
-        user_id = int(user_id_raw) if user_id_raw else 0
+        user_id = int(user_id_raw) if user_id_raw else 0 
         user_name = data.get('user_name') or 'Неизвестный'
         phone = data.get('phone')
         guests = data.get('guests')
-        table_id = data.get('table')
-        time_slot = data.get('time')
-        date_str = data.get('date')
+        table_id = data.get('table') 
+        time_slot = data.get('time') 
+        date_str = data.get('date') 
 
-        if not all([phone, guests, table_id, time_slot, date_str]):
-            return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
+        # Проверка наличия обязательных полей
+        required_fields = {
+            'phone': phone, 
+            'guests': guests, 
+            'table': table_id, 
+            'time': time_slot, 
+            'date': date_str
+        }
 
+        missing_fields = [k for k, v in required_fields.items() if not v]
+        
+        if missing_fields:
+            # --- ЛОГ ОШИБКИ И 400 ОТВЕТ ---
+            logging.error(f"API /book is missing fields: {missing_fields}")
+            return jsonify({
+                "status": "error", 
+                "message": f"Не хватает данных для бронирования. Отсутствует: {', '.join(missing_fields)}"
+            }), 400
+
+        # Продолжение логики бронирования
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         booking_datetime = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
 
@@ -407,11 +428,11 @@ def book_api():
                 except Exception as e:
                     print("Не удалось отправить сообщение админу:", e)
 
-            return {"status": "ok", "message": "Бронь успешно создана"}, 200
+            return jsonify({"status": "ok", "message": "Бронь успешно создана"}), 200
 
     except Exception as e:
-        logging.error(f"Ошибка /book: {e}")
-        return {"status": "error", "message": str(e)}, 400
+        logging.error(f"Критическая ошибка /book: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 400
 
 @app.route("/get_booked_times", methods=["GET"])
 def get_booked_times():
@@ -420,7 +441,7 @@ def get_booked_times():
         date_str = request.args.get('date')
 
         if not all([table_id, date_str]):
-            return {"status": "error", "message": "Не хватает данных (стол или дата)"}, 400
+            return jsonify({"status": "error", "message": "Не хватает данных (стол или дата)"}), 400
 
         # Убедимся, что дата корректна
         datetime.strptime(date_str, '%Y-%m-%d')
@@ -432,22 +453,23 @@ def get_booked_times():
                     SELECT time_slot FROM bookings 
                     WHERE table_id = %s 
                       AND booking_for::date = %s 
-                      AND (booking_for + interval '1 hour') > NOW(); 
+                      AND (booking_for + interval '1 hour') > NOW() 
+                    ORDER BY time_slot;
                     """, 
                     (table_id, date_str)
                 )
                 booked_times = [row['time_slot'] for row in cursor.fetchall()]
         
-        return {"status": "ok", "booked_times": booked_times}, 200
+        return jsonify({"status": "ok", "booked_times": booked_times}), 200
 
     except ValueError:
-        return {"status": "error", "message": "Неверный формат даты."}, 400
+        return jsonify({"status": "error", "message": "Неверный формат даты."}), 400
     except Exception as e:
         logging.error(f"Ошибка /get_booked_times: {e}") 
-        return {"status": "error", "message": str(e)}, 400
+        return jsonify({"status": "error", "message": str(e)}), 400
 
 
-# 🔥🔥🔥 ДОБАВЛЕН НЕДОСТАЮЩИЙ МАРШРУТ 🔥🔥🔥
+# 🔥🔥🔥 МАРШРУТ, КОТОРЫЙ РЕШАЕТ ОШИБКУ 404 🔥🔥🔥
 @app.route("/get_booked_tables", methods=["GET"])
 def get_booked_tables():
     """
@@ -479,7 +501,7 @@ def get_booked_tables():
                 # Собираем список ID занятых столов
                 booked_tables = [str(row['table_id']) for row in cursor.fetchall()]
         
-        print(f"DEBUG /get_booked_tables: Date={date_str}, Time={time_slot}, Booked={booked_tables}")
+        logging.info(f"API /get_booked_tables: Date={date_str}, Time={time_slot}, Booked={booked_tables}")
         return jsonify({"status": "ok", "booked_tables": booked_tables}), 200
 
     except ValueError:
@@ -487,7 +509,6 @@ def get_booked_tables():
     except Exception as e:
         logging.error(f"Ошибка /get_booked_tables: {e}") 
         return jsonify({"status": "error", "message": "Внутренняя ошибка сервера."}), 500
-# 🔥🔥🔥 КОНЕЦ ДОБАВЛЕННОГО МАРШРУТА 🔥🔥🔥
 
 
 @app.route("/")

@@ -81,11 +81,25 @@ def init_db():
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS phone TEXT;")
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS guests INT;")
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_for TIMESTAMP;")
+                
+                # ========================================================
+                # ДОБАВЛЕНИЕ ИНДЕКСОВ ДЛЯ ОПТИМИЗАЦИИ
+                # ========================================================
+                # 1. Композитный индекс для быстрой проверки конфликтов (table_id, date, time)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_conflict ON bookings (table_id, booking_for);")
+                
+                # 2. Индекс для быстрого поиска активной брони пользователя (Моя бронь)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_user_active ON bookings (user_id, booking_for DESC);")
+                
+                # 3. Индекс для админ-панели и общей истории (сортировка и поиск)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_future_time ON bookings (booking_for);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_booked_at ON bookings (booked_at DESC);")
+                # ========================================================
 
                 cur.execute("SELECT COUNT(*) AS c FROM tables;")
                 c = cur.fetchone()["c"]
                 if c == 0:
-                    # создаем 8 столов
+                    # создаем 8 столов (можно поменять на 10, если в baza.py 10)
                     cur.execute("INSERT INTO tables (id) SELECT generate_series(1, 8);")
             conn.commit()
         print("База данных: OK")

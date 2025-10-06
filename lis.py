@@ -101,7 +101,6 @@ def main_reply_kb(user_id: int, user_name: str) -> types.ReplyKeyboardMarkup:
     web_app_url = f"{WEBAPP_URL}?user_id={user_id}&user_name={user_name}&bot_url={RENDER_EXTERNAL_URL}"
     
     row1 = [
-        types.KeyboardButton("🦊 Забронировать", web_app=types.WebAppInfo(url=web_app_url)),
         types.KeyboardButton("📋 Моя бронь"),
     ]
     row2 = [types.KeyboardButton("📖 Меню")]

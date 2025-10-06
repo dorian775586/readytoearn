@@ -14,6 +14,7 @@ logging.basicConfig(level=logging.INFO)
 # =========================
 # ENV
 # =========================
+# Ваши переменные окружения
 BOT_TOKEN = (os.environ.get("BOT_TOKEN") or "").strip()
 DATABASE_URL = (os.environ.get("DATABASE_URL") or "").strip()
 ADMIN_ID_ENV = (os.environ.get("ADMIN_ID") or "").strip()
@@ -82,7 +83,8 @@ def init_db():
                 cur.execute("SELECT COUNT(*) AS c FROM tables;")
                 c = cur.fetchone()["c"]
                 if c == 0:
-                    cur.execute("INSERT INTO tables (id) SELECT generate_series(1, 10);")
+                    # Создаем 8 столов, чтобы соответствовать новому фронтенду
+                    cur.execute("INSERT INTO tables (id) SELECT generate_series(1, 8);")
 
             conn.commit()
         print("База данных: OK")
@@ -109,7 +111,7 @@ def main_reply_kb(user_id: int, user_name: str) -> types.ReplyKeyboardMarkup:
     return kb
 
 # =========================
-# COMMANDS
+# COMMANDS, TEXT BUTTONS, INLINE CALLBACKS (Оставлены без изменений)
 # =========================
 @bot.message_handler(commands=["start"])
 def cmd_start(message: types.Message):
@@ -149,9 +151,6 @@ def cmd_history(message: types.Message):
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка истории: {e}")
 
-# =========================
-# TEXT BUTTONS
-# =========================
 @bot.message_handler(func=lambda m: m.text == "📋 Моя бронь")
 def on_my_booking(message: types.Message):
     try:
@@ -230,7 +229,7 @@ def on_admin_panel(message: types.Message):
             
             kb = types.InlineKeyboardMarkup()
             kb.add(types.InlineKeyboardButton(text="❌ Отменить", callback_data=f"admin_cancel_{r['booking_id']}"))
-            bot.send_message(message.chat.id, text, reply_markup=kb)
+            bot.send_message(message.chat.id, text, parse_mode="HTML", reply_markup=kb)
 
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка админ-панели: {e}")
@@ -239,9 +238,6 @@ def on_admin_panel(message: types.Message):
 def on_history_btn(message: types.Message):
     return cmd_history(message)
 
-# =========================
-# INLINE CALLBACKS
-# =========================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("cancel_"))
 def on_cancel_user(call: types.CallbackQuery):
     booking_id = int(call.data.split("_")[1])
@@ -284,9 +280,6 @@ def on_cancel_admin(call: types.CallbackQuery):
     except Exception as e:
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
 
-# =========================
-# CONTACT & WEB_APP DATA
-# =========================
 @bot.message_handler(content_types=['web_app_data'])
 def on_webapp_data(message: types.Message):
     print("ПРИШЛИ ДАННЫЕ ОТ WEBAPP:", message.web_app_data.data)
@@ -315,6 +308,7 @@ def book_api():
         conn = psycopg2.connect(DATABASE_URL)
 
         with conn.cursor() as cursor:
+            # ПРОВЕРКА НА ДУБЛИКАТ
             cursor.execute(
                 "SELECT 1 FROM bookings WHERE table_id = %s AND booking_for::date = %s AND time_slot = %s;",
                 (table_id, booking_date, time_slot)
@@ -324,6 +318,7 @@ def book_api():
                 return {"status": "error", "message": "Этот стол уже забронирован на это время."}, 409
         
         with conn.cursor() as cursor:
+            # СОЗДАНИЕ БРОНИ
             cursor.execute(
                 """
                 INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
@@ -380,17 +375,23 @@ def get_booked_times():
         conn = psycopg2.connect(DATABASE_URL)
         
         with conn.cursor() as cursor:
+            # ПОЛУЧАЕМ ЗАНЯТЫЕ СЛОТЫ ДЛЯ ОДНОГО СТОЛА
             cursor.execute(
                 "SELECT time_slot FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
                 (table_id, date_str)
             )
-            booked_times = [row[0] for row in cursor.fetchall()]
+            booked_times = [row['time_slot'] for row in cursor.fetchall()] # Используем 'time_slot' так как RealDictCursor
         
         return {"status": "ok", "booked_times": booked_times}, 200
 
     except Exception as e:
         logging.error(f"Ошибка /get_booked_times: {e}")
         return {"status": "error", "message": str(e)}, 400
+
+# =========================
+# МАРШРУТ /get_booked_tables УДАЛЕН.
+# =========================
+
 
 @app.route("/")
 def index():

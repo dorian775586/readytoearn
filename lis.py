@@ -27,13 +27,7 @@ if not DATABASE_URL:
 if not RENDER_EXTERNAL_URL:
     raise RuntimeError("Ошибка: RENDER_EXTERNAL_URL не задан! Проверьте переменные окружения на Render.")
 
-# Очистка и нормализация URL/токенов
-if RENDER_EXTERNAL_URL:
-    RENDER_EXTERNAL_URL = RENDER_EXTERNAL_URL.strip()
-if WEBAPP_URL:
-    WEBAPP_URL = WEBAPP_URL.strip()
 
-# Принудительное добавление порта для некоторых хостингов PostgreSQL
 if "render.com/" in DATABASE_URL and ":5432" not in DATABASE_URL:
     DATABASE_URL = DATABASE_URL.replace(".render.com/", ".render.com:5432/")
 
@@ -55,12 +49,7 @@ CORS(app)
 # DB INIT
 # =========================
 def db_connect():
-    # Используем RealDictCursor для возврата словарей
-    return psycopg2.connect(
-        DATABASE_URL, 
-        cursor_factory=RealDictCursor,
-        sslmode='require' 
-    )
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 def init_db():
     try:
@@ -93,7 +82,6 @@ def init_db():
                 cur.execute("SELECT COUNT(*) AS c FROM tables;")
                 c = cur.fetchone()["c"]
                 if c == 0:
-                    # Вставляем столы с ID 1 по 10
                     cur.execute("INSERT INTO tables (id) SELECT generate_series(1, 10);")
 
             conn.commit()
@@ -107,14 +95,7 @@ def init_db():
 def main_reply_kb(user_id: int, user_name: str) -> types.ReplyKeyboardMarkup:
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     
-    cleaned_webapp_url = WEBAPP_URL.rstrip('/')
-    
-    # Формируем URL с параметрами
-    web_app_url = (
-        f"{cleaned_webapp_url}?user_id={user_id}&user_name={user_name}&bot_url={RENDER_EXTERNAL_URL}"
-    )
-    
-    print(f"DEBUG: WebApp URL, отправляемый в Telegram: {web_app_url}")
+    web_app_url = f"{WEBAPP_URL}?user_id={user_id}&user_name={user_name}&bot_url={RENDER_EXTERNAL_URL}"
     
     row1 = [
         types.KeyboardButton("🦊 Забронировать", web_app=types.WebAppInfo(url=web_app_url)),
@@ -134,34 +115,14 @@ def main_reply_kb(user_id: int, user_name: str) -> types.ReplyKeyboardMarkup:
 def cmd_start(message: types.Message):
     user_id = message.from_user.id
     user_name = message.from_user.full_name or "Неизвестный"
-    
-    try:
-        bot.send_photo(
-            message.chat.id,
-            photo="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQbh6M8aJwxylo8aI1B-ceUHaiOyEnA425a0A&s",
-            caption="<b>Рестобар «Белый Лис»</b> приветствует вас!\nТут вы можете дистанционно забронировать любой понравившийся столик!",
-            reply_markup=main_reply_kb(user_id, user_name),
-            parse_mode="HTML"
-        )
-        print(f"*** УСПЕШНО ОТПРАВЛЕНО /START ПОЛЬЗОВАТЕЛЮ {user_id} ***")
+    bot.send_photo(
+        message.chat.id,
+        photo="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQbh6M8aJwxylo8aI1B-ceUHaiOyEnA425a0A&s",
+        caption="<b>Рестобар «Белый Лис»</b> приветствует вас!\nТут вы можете дистанционно забронировать любой понравившийся столик!",
+        reply_markup=main_reply_kb(user_id, user_name),
+        parse_mode="HTML"
+    )
 
-    except Exception as e:
-        logging.error(f"ОШИБКА В CMD_START для user {user_id}: {e}")
-        
-        try:
-            # Запасной вариант отправки (только текст)
-            bot.send_message(
-                message.chat.id,
-                text="⚠️ Проблема с загрузкой меню. Бот работает.\n\n"
-                     "<b>Рестобар «Белый Лис»</b> приветствует вас!\n"
-                     "Чтобы забронировать столик, нажмите на кнопку 'Забронировать'.",
-                reply_markup=main_reply_kb(user_id, user_name),
-                parse_mode="HTML"
-            )
-            print(f"*** УСПЕШНО ОТПРАВЛЕНО ТЕКСТОВОЕ СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЮ {user_id} ***")
-        except Exception as text_e:
-            logging.error(f"КРИТИЧЕСКАЯ ОШИБКА ОТПРАВКИ ОТВЕТА ПОЛЬЗОВАТЕЛЮ {user_id}: {text_e}")
-            
 @bot.message_handler(commands=["history"])
 def cmd_history(message: types.Message):
     if not ADMIN_ID or str(message.chat.id) != str(ADMIN_ID):
@@ -199,8 +160,7 @@ def on_my_booking(message: types.Message):
                 cur.execute("""
                     SELECT booking_id, table_id, time_slot, booking_for
                     FROM bookings
-                    WHERE user_id=%s 
-                      AND (booking_for + interval '1 hour') > NOW()
+                    WHERE user_id=%s AND booking_for > NOW()
                     ORDER BY booked_at DESC
                     LIMIT 1;
                 """, (message.from_user.id,))
@@ -253,7 +213,7 @@ def on_admin_panel(message: types.Message):
                 cur.execute("""
                     SELECT booking_id, user_name, table_id, time_slot, booking_for, phone
                     FROM bookings
-                    WHERE (booking_for + interval '1 hour') > NOW()
+                    WHERE booking_for > NOW()
                     ORDER BY booking_for ASC;
                 """)
                 rows = cur.fetchall()
@@ -270,7 +230,7 @@ def on_admin_panel(message: types.Message):
             
             kb = types.InlineKeyboardMarkup()
             kb.add(types.InlineKeyboardButton(text="❌ Отменить", callback_data=f"admin_cancel_{r['booking_id']}"))
-            bot.send_message(message.chat.id, text, reply_markup=kb, parse_mode="HTML")
+            bot.send_message(message.chat.id, text, reply_markup=kb)
 
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка админ-панели: {e}")
@@ -311,15 +271,13 @@ def on_cancel_admin(call: types.CallbackQuery):
                 conn.commit()
         
         if booking_info:
-            user_id = booking_info.get('user_id')
-            
-            if user_id:
-                booking_date = booking_info['booking_for'].strftime("%d.%m.%Y")
-                message_text = f"❌ Ваша бронь отменена администратором.\n\nСтол: {booking_info['table_id']}\nДата: {booking_date}\nВремя: {booking_info['time_slot']}"
-                try:
-                    bot.send_message(user_id, message_text)
-                except Exception as e:
-                    print(f"Не удалось уведомить пользователя {user_id} об отмене брони: {e}")
+            user_id = booking_info['user_id']
+            booking_date = booking_info['booking_for'].strftime("%d.%m.%Y")
+            message_text = f"❌ Ваша бронь отменена администратором.\n\nСтол: {booking_info['table_id']}\nДата: {booking_date}\nВремя: {booking_info['time_slot']}"
+            try:
+                bot.send_message(user_id, message_text)
+            except Exception as e:
+                print(f"Не удалось уведомить пользователя {user_id} об отмене брони: {e}")
 
         bot.edit_message_text(f"Бронь #{booking_id} успешно отменена.", chat_id=call.message.chat.id, message_id=call.message.id)
         bot.answer_callback_query(call.id, "Бронь отменена.", show_alert=True)
@@ -340,99 +298,75 @@ def on_webapp_data(message: types.Message):
 def book_api():
     try:
         data = request.json
-        
-        # --- ДОБАВЛЕНО ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ---
-        logging.info(f"API /book received data: {data}")
-        # ---------------------------------------
-        
-        user_id_raw = data.get('user_id')
-        user_id = int(user_id_raw) if user_id_raw else 0 
+        user_id = data.get('user_id') or 0
         user_name = data.get('user_name') or 'Неизвестный'
         phone = data.get('phone')
         guests = data.get('guests')
-        table_id = data.get('table') 
-        time_slot = data.get('time') 
-        date_str = data.get('date') 
+        table_id = data.get('table')
+        time_slot = data.get('time')
+        date_str = data.get('date')
 
-        # Проверка наличия обязательных полей
-        required_fields = {
-            'phone': phone, 
-            'guests': guests, 
-            'table': table_id, 
-            'time': time_slot, 
-            'date': date_str
-        }
+        if not all([phone, guests, table_id, time_slot, date_str]):
+            return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
 
-        missing_fields = [k for k, v in required_fields.items() if not v]
-        
-        if missing_fields:
-            # --- ЛОГ ОШИБКИ И 400 ОТВЕТ ---
-            logging.error(f"API /book is missing fields: {missing_fields}")
-            return jsonify({
-                "status": "error", 
-                "message": f"Не хватает данных для бронирования. Отсутствует: {', '.join(missing_fields)}"
-            }), 400
-
-        # Продолжение логики бронирования
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         booking_datetime = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
 
-        with db_connect() as conn:
-            # 1. Проверка на дублирование
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "SELECT 1 FROM bookings WHERE table_id = %s AND booking_for::date = %s AND time_slot = %s;",
-                    (table_id, booking_date, time_slot)
-                )
-                existing_booking = cursor.fetchone()
-                if existing_booking:
-                    return {"status": "error", "message": "Этот стол уже забронирован на это время."}, 409
+        conn = psycopg2.connect(DATABASE_URL)
+
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT 1 FROM bookings WHERE table_id = %s AND booking_for::date = %s AND time_slot = %s;",
+                (table_id, booking_date, time_slot)
+            )
+            existing_booking = cursor.fetchone()
+            if existing_booking:
+                return {"status": "error", "message": "Этот стол уже забронирован на это время."}, 409
+        
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                """,
+                (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(), booking_datetime)
+            )
+            conn.commit()
             
-            # 2. Создание брони
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
-                    """,
-                    (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(), booking_datetime) 
-                )
-                conn.commit()
+        try:
+            formatted_date = booking_date.strftime("%d.%m.%Y")
+            message_text = f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}"
+            bot.send_message(user_id, message_text)
+        except Exception as e:
+            print(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
+
+        if ADMIN_ID:
+            try:
+                formatted_date = booking_date.strftime("%d.%m.%Y")
+                if user_id:
+                    user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>'
+                else:
+                    user_link = user_name
                 
-            # 3. Уведомление пользователя
-            if user_id: 
-                try:
-                    formatted_date = booking_date.strftime("%d.%m.%Y")
-                    message_text = f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}"
-                    bot.send_message(user_id, message_text)
-                except Exception as e:
-                    print(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
+                message_text = (
+                    f"Новая бронь:\n"
+                    f"Пользователь: {user_link}\n"
+                    f"Стол: {table_id}\n"
+                    f"Дата: {formatted_date}\n"
+                    f"Время: {time_slot}\n"
+                    f"Гостей: {guests}\n"
+                    f"Телефон: {phone}"
+                )
+                
+                bot.send_message(ADMIN_ID, message_text, parse_mode="HTML")
+            except Exception as e:
+                print("Не удалось отправить сообщение админу:", e)
 
-            # 4. Уведомление админа
-            if ADMIN_ID:
-                try:
-                    formatted_date = booking_date.strftime("%d.%m.%Y")
-                    user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
-                    
-                    message_text = (
-                        f"Новая бронь:\n"
-                        f"Пользователь: {user_link}\n"
-                        f"Стол: {table_id}\n"
-                        f"Дата: {formatted_date}\n"
-                        f"Время: {time_slot}\n"
-                        f"Гостей: {guests}\n"
-                        f"Телефон: {phone}"
-                    )
-                    
-                    bot.send_message(ADMIN_ID, message_text, parse_mode="HTML")
-                except Exception as e:
-                    print("Не удалось отправить сообщение админу:", e)
-
-            return jsonify({"status": "ok", "message": "Бронь успешно создана"}), 200
+        return {"status": "ok", "message": "Бронь успешно создана"}, 200
 
     except Exception as e:
-        logging.error(f"Критическая ошибка /book: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 400
+        logging.error(f"Ошибка /book: {e}")
+        return {"status": "error", "message": str(e)}, 400
 
 @app.route("/get_booked_times", methods=["GET"])
 def get_booked_times():
@@ -441,75 +375,22 @@ def get_booked_times():
         date_str = request.args.get('date')
 
         if not all([table_id, date_str]):
-            return jsonify({"status": "error", "message": "Не хватает данных (стол или дата)"}), 400
+            return {"status": "error", "message": "Не хватает данных (стол или дата)"}, 400
 
-        # Убедимся, что дата корректна
-        datetime.strptime(date_str, '%Y-%m-%d')
+        conn = psycopg2.connect(DATABASE_URL)
         
-        with db_connect() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT time_slot FROM bookings 
-                    WHERE table_id = %s 
-                      AND booking_for::date = %s 
-                      AND (booking_for + interval '1 hour') > NOW() 
-                    ORDER BY time_slot;
-                    """, 
-                    (table_id, date_str)
-                )
-                booked_times = [row['time_slot'] for row in cursor.fetchall()]
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT time_slot FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
+                (table_id, date_str)
+            )
+            booked_times = [row[0] for row in cursor.fetchall()]
         
-        return jsonify({"status": "ok", "booked_times": booked_times}), 200
+        return {"status": "ok", "booked_times": booked_times}, 200
 
-    except ValueError:
-        return jsonify({"status": "error", "message": "Неверный формат даты."}), 400
     except Exception as e:
-        logging.error(f"Ошибка /get_booked_times: {e}") 
-        return jsonify({"status": "error", "message": str(e)}), 400
-
-
-# 🔥🔥🔥 МАРШРУТ, КОТОРЫЙ РЕШАЕТ ОШИБКУ 404 🔥🔥🔥
-@app.route("/get_booked_tables", methods=["GET"])
-def get_booked_tables():
-    """
-    Возвращает список table_id, которые заняты на указанную дату и время.
-    """
-    try:
-        date_str = request.args.get('date')
-        time_slot = request.args.get('time')
-
-        if not all([date_str, time_slot]):
-            return jsonify({"status": "error", "message": "Не хватает данных (дата или время)"}), 400
-        
-        # Проверка валидности данных
-        datetime.strptime(date_str, '%Y-%m-%d')
-        datetime.strptime(time_slot, '%H:%M')
-
-        with db_connect() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT DISTINCT table_id FROM bookings 
-                    WHERE booking_for::date = %s 
-                      AND time_slot = %s
-                      AND (booking_for + interval '1 hour') > NOW(); 
-                    """,
-                    (date_str, time_slot)
-                )
-                
-                # Собираем список ID занятых столов
-                booked_tables = [str(row['table_id']) for row in cursor.fetchall()]
-        
-        logging.info(f"API /get_booked_tables: Date={date_str}, Time={time_slot}, Booked={booked_tables}")
-        return jsonify({"status": "ok", "booked_tables": booked_tables}), 200
-
-    except ValueError:
-        return jsonify({"status": "error", "message": "Неверный формат даты или времени."}), 400
-    except Exception as e:
-        logging.error(f"Ошибка /get_booked_tables: {e}") 
-        return jsonify({"status": "error", "message": "Внутренняя ошибка сервера."}), 500
-
+        logging.error(f"Ошибка /get_booked_times: {e}")
+        return {"status": "error", "message": str(e)}, 400
 
 @app.route("/")
 def index():
@@ -537,14 +418,8 @@ def webhook():
     if request.headers.get("content-type") == "application/json":
         json_string = request.get_data(as_text=True)
         update = types.Update.de_json(json_string)
-        
-        try:
-            bot.process_new_updates([update])
-            return "OK", 200
-        except Exception as e:
-            logging.error(f"Ошибка при обработке обновления Telebot: {e}")
-            return "OK", 200
-
+        bot.process_new_updates([update])
+        return "OK", 200
     else:
         return "Invalid content type", 403
 
@@ -557,7 +432,6 @@ if __name__ == "__main__":
         raise RuntimeError("Ошибка: Telegram webhook требует HTTPS!")
 
     try:
-        # Устанавливаем Webhook при запуске
         bot.remove_webhook()
         webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
         ok = bot.set_webhook(url=webhook_url)

@@ -244,13 +244,57 @@ def on_history_btn(message: types.Message):
 def on_cancel_user(call: types.CallbackQuery):
     booking_id = int(call.data.split("_")[1])
     try:
+        booking_info = None
+        rows_deleted = 0
+        
         with db_connect() as conn:
             with conn.cursor() as cur:
+                # 1. Получаем информацию о бронировании ДО удаления
+                cur.execute("""
+                    SELECT user_id, user_name, table_id, time_slot, booking_for, phone, guests
+                    FROM bookings
+                    WHERE booking_id=%s AND user_id=%s;
+                """, (booking_id, call.from_user.id))
+                booking_info = cur.fetchone()
+                
+                # 2. Удаляем бронирование
                 cur.execute("DELETE FROM bookings WHERE booking_id=%s AND user_id=%s;", (booking_id, call.from_user.id))
+                rows_deleted = cur.rowcount
                 conn.commit()
-        bot.edit_message_text("Бронь отменена.", chat_id=call.message.chat.id, message_id=call.message.id)
+        
+        if rows_deleted > 0:
+            bot.edit_message_text("Бронь отменена.", chat_id=call.message.chat.id, message_id=call.message.id)
+            
+            # 3. Уведомление администратора
+            if ADMIN_ID and booking_info:
+                try:
+                    booking_date = booking_info['booking_for'].strftime("%d.%m.%Y")
+                    user_id = booking_info['user_id']
+                    # Используем полное имя пользователя из call.from_user.full_name, если user_name в базе пуст
+                    user_name = booking_info['user_name'] or call.from_user.full_name or 'Неизвестный пользователь'
+                    user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
+                    
+                    message_text = (
+                        f"❌ Бронь отменена пользователем:\n"
+                        f"ID Брони: <b>#{booking_id}</b>\n"
+                        f"Пользователь: {user_link}\n"
+                        f"Стол: {booking_info['table_id']}\n"
+                        f"Дата: {booking_date}\n"
+                        f"Время: {booking_info['time_slot']}\n"
+                        f"Гостей: {booking_info.get('guests', 'N/A')}\n"
+                        f"Телефон: {booking_info.get('phone', 'Не указан')}"
+                    )
+                    bot.send_message(ADMIN_ID, message_text, parse_mode="HTML")
+                except Exception as e:
+                    print(f"Не удалось уведомить админа об отмене брони: {e}")
+
+        else:
+             # Если 0 строк удалено (бронь уже отменена/не найдена)
+             bot.answer_callback_query(call.id, "Бронь уже была отменена или не найдена.", show_alert=True)
+             
     except Exception as e:
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
+
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_cancel_"))
 def on_cancel_admin(call: types.CallbackQuery):

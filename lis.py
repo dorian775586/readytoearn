@@ -372,13 +372,21 @@ def get_booked_times():
         if not all([table_id, date_str]):
             return {"status": "error", "message": "Не хватает данных (стол или дата)"}, 400
 
+        # --- ИСПРАВЛЕНИЕ: Преобразуем строку даты в объект Python date ---
+        try:
+            query_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        except ValueError:
+            logging.error(f"Неверный формат даты: {date_str}")
+            return {"status": "error", "message": "Неверный формат даты. Ожидается YYYY-MM-DD."}, 400
+        # -----------------------------------------------------------------
+
         conn = psycopg2.connect(DATABASE_URL)
         
         with conn.cursor() as cursor:
             # ПОЛУЧАЕМ ЗАНЯТЫЕ СЛОТЫ ДЛЯ ОДНОГО СТОЛА
             cursor.execute(
                 "SELECT time_slot FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
-                (table_id, date_str)
+                (table_id, query_date) # Используем объект date
             )
             booked_times = [row['time_slot'] for row in cursor.fetchall()] # Используем 'time_slot' так как RealDictCursor
         
@@ -386,6 +394,8 @@ def get_booked_times():
 
     except Exception as e:
         logging.error(f"Ошибка /get_booked_times: {e}")
+        # Возвращаем 500, если это ошибка сервера/БД, но оставляем 400, как было в вашем коде,
+        # чтобы не менять логику обработки ошибок на фронтенде
         return {"status": "error", "message": str(e)}, 400
 
 # =========================

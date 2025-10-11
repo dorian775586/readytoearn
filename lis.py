@@ -54,6 +54,9 @@ def db_connect():
 
 def init_db():
     try:
+        # Устанавливаем целевое количество столов, которое мы ожидаем на фронтенде
+        TARGET_TABLE_COUNT = 20 
+        
         with db_connect() as conn:
             with conn.cursor() as cur:
                 # Таблицы
@@ -96,11 +99,20 @@ def init_db():
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_booked_at ON bookings (booked_at DESC);")
                 # ========================================================
 
-                cur.execute("SELECT COUNT(*) AS c FROM tables;")
-                c = cur.fetchone()["c"]
-                if c == 0:
-                    # создаем 8 столов (можно поменять на 10, если в baza.py 10)
-                    cur.execute("INSERT INTO tables (id) SELECT generate_series(1, 8);")
+                # ИСПРАВЛЕННЫЙ БЛОК: Проверяем, какие столы нужно добавить
+                cur.execute("SELECT id FROM tables ORDER BY id ASC;")
+                existing_table_ids = [row['id'] for row in cur.fetchall()]
+                
+                tables_to_add = [i for i in range(1, TARGET_TABLE_COUNT + 1) if i not in existing_table_ids]
+
+                if tables_to_add:
+                    # Создаем строку значений для INSERT (например, (11), (12), ..., (20))
+                    insert_values = ",".join(f"({i})" for i in tables_to_add)
+                    cur.execute(f"INSERT INTO tables (id) VALUES {insert_values};")
+                    print(f"База данных: Добавлено {len(tables_to_add)} новых столов (ID: {tables_to_add}).")
+                else:
+                    print("База данных: Все столы уже существуют.")
+                    
             conn.commit()
         print("База данных: OK")
     except Exception as e:
@@ -303,9 +315,9 @@ def on_cancel_user(call: types.CallbackQuery):
                     print(f"Не удалось уведомить админа об отмене брони: {e}")
 
         else:
-             # Если 0 строк удалено (бронь уже отменена/не найдена)
-             bot.answer_callback_query(call.id, "Бронь уже была отменена или не найдена.", show_alert=True)
-             
+              # Если 0 строк удалено (бронь уже отменена/не найдена)
+              bot.answer_callback_query(call.id, "Бронь уже была отменена или не найдена.", show_alert=True)
+              
     except Exception as e:
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
 
@@ -440,6 +452,13 @@ def get_booked_times():
         conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
         with conn.cursor() as cursor:
+            # ПРОВЕРКА НА СУЩЕСТВОВАНИЕ СТОЛА - ДОБАВЛЕНО ДЛЯ УСТОЙЧИВОСТИ
+            cursor.execute("SELECT 1 FROM tables WHERE id = %s;", (table_id,))
+            if cursor.fetchone() is None:
+                # Если стол не найден в таблице `tables`, возвращаем пустой список (все занято)
+                # Это будет происходить, если init_db еще не запустился или не обновил таблицу
+                return {"status": "ok", "free_times": []}, 200
+            
             cursor.execute(
                 "SELECT time_slot FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
                 (table_id, query_date)

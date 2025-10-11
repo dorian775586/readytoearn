@@ -54,9 +54,6 @@ def db_connect():
 
 def init_db():
     try:
-        # Устанавливаем целевое количество столов, которое мы ожидаем на фронтенде
-        TARGET_TABLE_COUNT = 20 
-        
         with db_connect() as conn:
             with conn.cursor() as cur:
                 # Таблицы
@@ -99,20 +96,24 @@ def init_db():
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_booked_at ON bookings (booked_at DESC);")
                 # ========================================================
 
-                # ИСПРАВЛЕННЫЙ БЛОК: Проверяем, какие столы нужно добавить
+                # ========================================================
+                # ИЗМЕНЕНИЕ: Расширяем количество столов до 20,
+                #            добавляя только недостающие.
+                # ========================================================
+                TARGET_TABLE_COUNT = 20
                 cur.execute("SELECT id FROM tables ORDER BY id ASC;")
                 existing_table_ids = [row['id'] for row in cur.fetchall()]
-                
                 tables_to_add = [i for i in range(1, TARGET_TABLE_COUNT + 1) if i not in existing_table_ids]
-
+                
                 if tables_to_add:
-                    # Создаем строку значений для INSERT (например, (11), (12), ..., (20))
+                    # Создаем строку для множественной вставки: (1), (2), (3)...
                     insert_values = ",".join(f"({i})" for i in tables_to_add)
                     cur.execute(f"INSERT INTO tables (id) VALUES {insert_values};")
                     print(f"База данных: Добавлено {len(tables_to_add)} новых столов (ID: {tables_to_add}).")
                 else:
-                    print("База данных: Все столы уже существуют.")
-                    
+                    print("База данных: Все столы до 20 уже существуют.")
+                # ========================================================
+
             conn.commit()
         print("База данных: OK")
     except Exception as e:
@@ -248,9 +249,9 @@ def on_admin_panel(message: types.Message):
         for r in rows:
             booking_date = r['booking_for'].strftime("%d.%m.%Y")
             text = f"🔖 Бронь #{r['booking_id']} — {r['user_name']}\n"
-            text += f"  - Стол: {r['table_id']}\n"
-            text += f"  - Время: {r['time_slot']} ({booking_date})\n"
-            text += f"  - Телефон: {r['phone']}\n"
+            text += f"   - Стол: {r['table_id']}\n"
+            text += f"   - Время: {r['time_slot']} ({booking_date})\n"
+            text += f"   - Телефон: {r['phone']}\n"
             
             kb = types.InlineKeyboardMarkup()
             kb.add(types.InlineKeyboardButton(text="❌ Отменить", callback_data=f"admin_cancel_{r['booking_id']}"))
@@ -315,9 +316,9 @@ def on_cancel_user(call: types.CallbackQuery):
                     print(f"Не удалось уведомить админа об отмене брони: {e}")
 
         else:
-              # Если 0 строк удалено (бронь уже отменена/не найдена)
-              bot.answer_callback_query(call.id, "Бронь уже была отменена или не найдена.", show_alert=True)
-              
+             # Если 0 строк удалено (бронь уже отменена/не найдена)
+             bot.answer_callback_query(call.id, "Бронь уже была отменена или не найдена.", show_alert=True)
+             
     except Exception as e:
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
 
@@ -452,13 +453,6 @@ def get_booked_times():
         conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
         with conn.cursor() as cursor:
-            # ПРОВЕРКА НА СУЩЕСТВОВАНИЕ СТОЛА - ДОБАВЛЕНО ДЛЯ УСТОЙЧИВОСТИ
-            cursor.execute("SELECT 1 FROM tables WHERE id = %s;", (table_id,))
-            if cursor.fetchone() is None:
-                # Если стол не найден в таблице `tables`, возвращаем пустой список (все занято)
-                # Это будет происходить, если init_db еще не запустился или не обновил таблицу
-                return {"status": "ok", "free_times": []}, 200
-            
             cursor.execute(
                 "SELECT time_slot FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
                 (table_id, query_date)

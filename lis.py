@@ -535,4 +535,4 @@ if __name__ == "__main__":
         print("Ошибка установки webhook:", e)
     
     # app.run(host="0.0.0.0", port=port) # Эту строку теперь используем
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port) 

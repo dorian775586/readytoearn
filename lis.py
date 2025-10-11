@@ -56,10 +56,15 @@ def init_db():
     try:
         with db_connect() as conn:
             with conn.cursor() as cur:
-                # Таблицы
+                # =========================
+                # ИЗМЕНЕНИЯ: ДОБАВЛЕНА ПОДДЕРЖКА ЗАЛОВ
+                # =========================
+                # 1. ТАБЛИЦЫ
+                cur.execute("DROP TABLE IF EXISTS tables CASCADE;")
                 cur.execute("""
-                CREATE TABLE IF NOT EXISTS tables (
-                    id INT PRIMARY KEY
+                CREATE TABLE tables (
+                    id INT PRIMARY KEY,
+                    hall_name VARCHAR(50) NOT NULL
                 );
                 """)
                 cur.execute("""
@@ -83,24 +88,26 @@ def init_db():
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_for TIMESTAMP;")
                 
                 # ========================================================
-                # ДОБАВЛЕНИЕ ИНДЕКСОВ ДЛЯ ОПТИМИЗАЦИИ
+                # ДОБАВЛЕНИЕ ИНДЕКСОВ ДЛЯ ОПТИМИЗАЦИИ (без изменений)
                 # ========================================================
-                # 1. Композитный индекс для быстрой проверки конфликтов (table_id, date, time)
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_conflict ON bookings (table_id, booking_for);")
-                
-                # 2. Индекс для быстрого поиска активной брони пользователя (Моя бронь)
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_user_active ON bookings (user_id, booking_for DESC);")
-                
-                # 3. Индекс для админ-панели и общей истории (сортировка и поиск)
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_future_time ON bookings (booking_for);")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_booked_at ON bookings (booked_at DESC);")
                 # ========================================================
 
+                # 2. ЗАПОЛНЕНИЕ СТОЛОВ ПО ЗАЛАМ (6 основных, 4 терраса - всего 10)
                 cur.execute("SELECT COUNT(*) AS c FROM tables;")
                 c = cur.fetchone()["c"]
                 if c == 0:
-                    # создаем 8 столов (можно поменять на 10, если в baza.py 10)
-                    cur.execute("INSERT INTO tables (id) SELECT generate_series(1, 8);")
+                    # Основной зал (id 1-6)
+                    for i in range(1, 7):
+                        cur.execute("INSERT INTO tables (id, hall_name) VALUES (%s, 'Основной зал');", (i,))
+                    # Терраса (id 7-10)
+                    for i in range(7, 11):
+                        cur.execute("INSERT INTO tables (id, hall_name) VALUES (%s, 'Терраса');", (i,))
+                    print("Таблицы: 10 столов распределены по залам.")
+                
             conn.commit()
         print("База данных: OK")
     except Exception as e:
@@ -112,12 +119,17 @@ def init_db():
 def main_reply_kb(user_id: int, user_name: str) -> types.ReplyKeyboardMarkup:
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     
+    # ИЗМЕНЕНИЕ: ВАША КНОПКА БРОНИРОВАНИЯ
     web_app_url = f"{WEBAPP_URL}?user_id={user_id}&user_name={user_name}&bot_url={RENDER_EXTERNAL_URL}"
-    
     row1 = [
-        types.KeyboardButton("📋 Моя бронь"),
+        types.KeyboardButton("✅ Записаться онлайн", web_app=types.WebAppInfo(url=web_app_url)),
     ]
-    row2 = [types.KeyboardButton("📖 Меню")]
+    
+    row2 = [
+        types.KeyboardButton("📋 Моя бронь"),
+        types.KeyboardButton("📖 Меню")
+    ]
+    
     kb.row(*row1)
     kb.row(*row2)
     if ADMIN_ID and str(user_id) == str(ADMIN_ID):
@@ -133,8 +145,12 @@ def cmd_start(message: types.Message):
     user_name = message.from_user.full_name or "Неизвестный"
     bot.send_photo(
         message.chat.id,
-        photo="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQbh6M8aJwxylo8aI1B-ceUHaiOyEnA425a0A&s",
-        caption="<b>Рестобар «Белый Лис»</b> приветствует вас!\nТут вы можете дистанционно забронировать любой понравившийся столик!",
+        # НОВАЯ ССЫЛКА НА ФОТО «МАМА ХУАНА»
+        photo="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANdGcSQEWj37bVRbDfps6Ltix6_DffSVFOFXNzNlg&s",
+        
+        # НОВЫЙ ТЕКСТ ПРИВЕТСТВИЯ
+        caption="<b>Ресторан «Мама Хуана» в Гомеле!</b>\nЗдесь вы можете дистанционно забронировать любой понравившийся столик!",
+        
         reply_markup=main_reply_kb(user_id, user_name),
         parse_mode="HTML"
     )
@@ -193,6 +209,7 @@ def on_my_booking(message: types.Message):
 
 @bot.message_handler(func=lambda m: m.text == "📖 Меню")
 def on_menu(message: types.Message):
+    # ИЗМЕНЕНИЕ: ВАМ НУЖНО ЗАМЕНИТЬ ЭТИ ССЫЛКИ НА МЕНЮ «МАМА ХУАНА»
     menu_photos = [
         "https://gitrepo-drab.vercel.app/images/menu1.jpg",
         "https://gitrepo-drab.vercel.app/images/menu2.jpg",
@@ -303,9 +320,9 @@ def on_cancel_user(call: types.CallbackQuery):
                     print(f"Не удалось уведомить админа об отмене брони: {e}")
 
         else:
-             # Если 0 строк удалено (бронь уже отменена/не найдена)
-             bot.answer_callback_query(call.id, "Бронь уже была отменена или не найдена.", show_alert=True)
-             
+              # Если 0 строк удалено (бронь уже отменена/не найдена)
+              bot.answer_callback_query(call.id, "Бронь уже была отменена или не найдена.", show_alert=True)
+              
     except Exception as e:
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
 
@@ -426,11 +443,12 @@ def book_api():
 @app.route("/get_booked_times", methods=["GET"])
 def get_booked_times():
     try:
-        table_id = request.args.get('table')
+        # ИЗМЕНЕНИЯ: ТЕПЕРЬ ПОЛУЧАЕМ ПАРАМЕТР hall
+        hall_name = request.args.get('hall')
         date_str = request.args.get('date')
 
-        if not all([table_id, date_str]):
-            return {"status": "error", "message": "Не хватает данных (стол или дата)"}, 400
+        if not all([hall_name, date_str]):
+            return {"status": "error", "message": "Не хватает данных (зал или дата)"}, 400
 
         try:
             query_date = datetime.strptime(date_str, '%Y-%m-%d').date()
@@ -439,25 +457,39 @@ def get_booked_times():
 
         conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
+        # 1. НАЙТИ СТОЛЫ, КОТОРЫЕ ОТНОСЯТСЯ К ВЫБРАННОМУ ЗАЛУ
         with conn.cursor() as cursor:
             cursor.execute(
-                "SELECT time_slot FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
-                (table_id, query_date)
+                "SELECT id FROM tables WHERE hall_name = %s;",
+                (hall_name,)
             )
-            booked_times = [row['time_slot'] for row in cursor.fetchall()]
+            hall_tables = [row['id'] for row in cursor.fetchall()]
+            
+            if not hall_tables:
+                 return {"status": "ok", "all_tables": [], "booked_slots": {}, "message": "Зал не найден или нет столов"}, 200
 
-        # генерация всех слотов с 12:00 до 23:00
-        start_time = datetime.combine(query_date, datetime.strptime("12:00", "%H:%M").time())
-        end_time = datetime.combine(query_date, datetime.strptime("23:00", "%H:%M").time())
-        current_time = start_time
-        all_slots = []
-        while current_time <= end_time:
-            slot_str = current_time.strftime("%H:%M")
-            if slot_str not in booked_times:
-                all_slots.append(slot_str)
-            current_time += timedelta(minutes=30)
+        # 2. ПОЛУЧИТЬ ЗАНЯТЫЕ СЛОТЫ ТОЛЬКО ДЛЯ ЭТИХ СТОЛОВ
+        booked_times_by_table = {}
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT table_id, time_slot FROM bookings 
+                WHERE booking_for::date = %s AND table_id = ANY(%s);
+                """,
+                (query_date, hall_tables)
+            )
+            for row in cursor.fetchall():
+                if row['table_id'] not in booked_times_by_table:
+                    booked_times_by_table[row['table_id']] = []
+                booked_times_by_table[row['table_id']].append(row['time_slot'])
 
-        return {"status": "ok", "free_times": all_slots}, 200
+        # 3. ФОРМИРОВАНИЕ ОТВЕТА ДЛЯ ФРОНТЕНДА
+        response_data = {
+            "status": "ok",
+            "all_tables": hall_tables, # Все столы в зале
+            "booked_slots": booked_times_by_table # Занятые слоты
+        }
+        return jsonify(response_data), 200
 
     except Exception as e:
         logging.error(f"Ошибка /get_booked_times: {e}")

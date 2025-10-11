@@ -25,3 +25,4 @@ Flask
 psycopg2-binary
 asyncpg
 Flask-Cors
+gunicorn

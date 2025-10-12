@@ -581,12 +581,15 @@ def get_booked_times():
         table_id = request.args.get('table')
         date_str = request.args.get('date')
 
+        print(f"[{datetime.now()}] get_booked_times: table_id={table_id}, date_str={date_str}") # ОТЛАДКА
+
         if not all([table_id, date_str]):
             print(f"[{datetime.now()}] Ошибка: Не хватает данных (стол или дата) для get_booked_times.")
             return {"status": "error", "message": "Не хватает данных (стол или дата)"}, 400
 
         try:
             query_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            print(f"[{datetime.now()}] get_booked_times: query_date={query_date}") # ОТЛАДКА
         except ValueError:
             print(f"[{datetime.now()}] Ошибка: Неверный формат даты для get_booked_times.")
             return {"status": "error", "message": "Неверный формат даты. Ожидается YYYY-MM-DD."}, 400
@@ -594,11 +597,15 @@ def get_booked_times():
         conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
         with conn.cursor() as cursor:
+            # Важно: время в booking_for должно быть в UTC (как и NOW()), 
+            # иначе будет ошибка при сравнении дат.
+            # Если booking_for содержит дату без времени, используйте booking_for::date
             cursor.execute(
                 "SELECT time_slot FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
                 (table_id, query_date)
             )
             booked_times = [row['time_slot'] for row in cursor.fetchall()]
+            print(f"[{datetime.now()}] get_booked_times: Забронированные слоты из БД для стола {table_id} на {query_date}: {booked_times}") # ОТЛАДКА
 
         start_time = datetime.combine(query_date, datetime.strptime("12:00", "%H:%M").time())
         end_time = datetime.combine(query_date, datetime.strptime("23:00", "%H:%M").time())
@@ -606,16 +613,30 @@ def get_booked_times():
         all_slots = []
         while current_time <= end_time:
             slot_str = current_time.strftime("%H:%M")
+            # Проверяем, если слот не забронирован И не является временем в прошлом относительно ТЕКУЩЕГО времени
+            # Для этого нужно сравнить текущее время слота с реальным текущим временем
+            # current_dt_for_slot = datetime.combine(query_date, datetime.strptime(slot_str, '%H:%M').time())
+            # ИЛИ просто не добавлять в all_slots, если слот уже прошел СЕГОДНЯ
+            
+            # Важное дополнение: если дата = сегодня, то убрать слоты, которые уже прошли
+            if query_date == date.today():
+                now_time = datetime.now().time()
+                slot_as_time = datetime.strptime(slot_str, '%H:%M').time()
+                if slot_as_time <= now_time: # Если слот уже прошел сегодня
+                    current_time += timedelta(minutes=30)
+                    continue # Пропускаем его
+            
             if slot_str not in booked_times:
                 all_slots.append(slot_str)
             current_time += timedelta(minutes=30)
-        print(f"[{datetime.now()}] Возвращено {len(all_slots)} свободных слотов для стола {table_id} на {date_str}.")
+        
+        print(f"[{datetime.now()}] get_booked_times: Возвращено {len(all_slots)} свободных слотов для стола {table_id} на {date_str}: {all_slots}") # ОТЛАДКА
         return {"status": "ok", "free_times": all_slots}, 200
 
     except Exception as e:
-        logging.error(f"[{datetime.now()}] Ошибка /get_booked_times: {e}")
+        logging.error(f"[{datetime.now()}] Ошибка /get_booked_times: {e}", exc_info=True) # Добавил exc_info для полного traceback
         return {"status": "error", "message": str(e)}, 500
-
+        
 # =========================
 # Основные маршруты Flask
 # =========================

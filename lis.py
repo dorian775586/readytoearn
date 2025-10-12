@@ -1,7 +1,7 @@
 import os
 import logging
 from datetime import datetime, timedelta, date
-import threading 
+# import threading # Больше не нужен, т.к. threaded=False
 import requests 
 import json 
 
@@ -157,7 +157,9 @@ def main_reply_kb(user_id: int, user_name: str) -> types.ReplyKeyboardMarkup:
 
 # =========================
 # COMMANDS & BUTTONS
+# ПОРЯДОК ХЕНДЛЕРОВ ВАЖЕН: КОНКРЕТНЫЕ СНАЧАЛА, УНИВЕРСАЛЬНЫЙ (default_handler) В КОНЦЕ
 # =========================
+
 @bot.message_handler(commands=["start"])
 def cmd_start(message: types.Message):
     print(f"[{datetime.now()}] (Обработчик) Получена команда /start от user_id: {message.from_user.id}")
@@ -208,7 +210,8 @@ def cmd_history(message: types.Message):
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка истории: {e}")
 
-@bot.message_handler(func=lambda m: m.text == "📋 Моя бронь")
+
+@bot.message_handler(func=lambda m: "Моя бронь" in m.text) # Более надежная проверка
 def on_my_booking(message: types.Message):
     print(f"[{datetime.now()}] (Обработчик) Нажата кнопка 'Моя бронь' от user_id: {message.from_user.id}")
     try:
@@ -235,7 +238,7 @@ def on_my_booking(message: types.Message):
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка: {e}")
 
-@bot.message_handler(func=lambda m: m.text == "📖 Меню")
+@bot.message_handler(func=lambda m: "Меню" in m.text) # Более надежная проверка
 def on_menu(message: types.Message):
     print(f"[{datetime.now()}] (Обработчик) Нажата кнопка 'Меню' от user_id: {message.from_user.id}")
     kb = types.InlineKeyboardMarkup(row_width=2) 
@@ -257,39 +260,11 @@ def on_menu(message: types.Message):
         print(f"[{datetime.now()}] (Обработчик) Ошибка при отправке меню user_id: {message.from_user.id}: {e}")
         bot.send_message(message.chat.id, "Извините, произошла ошибка при загрузке меню. Попробуйте позже.")
 
-# =========================
-# CATCH-ALL HANDLER ДЛЯ ДЕБАГА
-# =========================
-@bot.message_handler(func=lambda m: True)
-def default_handler(message: types.Message):
-    user_id = message.from_user.id
-    user_name = message.from_user.full_name or "Неизвестный"
-    
-    print(f"[{datetime.now()}] (Обработчик) ===> DEFAULT HANDLER HIT! Chat ID: {message.chat.id}, Content Type: '{message.content_type}', Text: '{message.text}'")
-    
-    if message.text:
-        # Проверяем, не является ли это сообщение текстом с клавиатуры
-        if message.text in ["📋 Моя бронь", "📖 Меню", "🛠 Управление", "🗂 История"]:
-            print(f"[{datetime.now()}] (Обработчик) ===> Сообщение '{message.text}' - это кнопка, но она не была обработана соответствующим хендлером. Проблема в порядке хендлеров.")
-            # Здесь не нужно отправлять ответ, чтобы не мешать другим хендлерам.
-            return 
-        
-        # Если это не кнопка и не команда (потому что /start не сработал)
-        try:
-            bot.send_message(
-                message.chat.id, 
-                "Извините, я понимаю только команды из меню или `/start`.",
-                reply_markup=main_reply_kb(user_id, user_name)
-            )
-            print(f"[{datetime.now()}] (Обработчик) ===> Отправлен ответ-заглушка пользователю {user_id}")
-        except Exception as e:
-            print(f"[{datetime.now()}] (Обработчик) Ошибка отправки ответа в default_handler: {e}")
-
 
 # =========================
 # АДМИН-ПАНЕЛЬ
 # =========================
-@bot.message_handler(func=lambda m: m.text == "🛠 Управление")
+@bot.message_handler(func=lambda m: "Управление" in m.text) # Более надежная проверка
 def on_admin_panel(message: types.Message):
     print(f"[{datetime.now()}] (Обработчик) Нажата кнопка 'Управление' от user_id: {message.from_user.id}")
     if not ADMIN_ID or str(message.chat.id) != str(ADMIN_ID):
@@ -323,8 +298,10 @@ def on_admin_panel(message: types.Message):
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка админ-панели: {e}")
 
-@bot.message_handler(func=lambda m: m.text == "🗂 История")
+@bot.message_handler(func=lambda m: "История" in m.text) # Более надежная проверка
 def on_history_btn(message: types.Message):
+    # Теперь этот обработчик будет срабатывать, потому что он будет выше universal_handler
+    # и использует "in" для гибкости.
     return cmd_history(message)
 
 # =========================
@@ -640,7 +617,7 @@ def get_booked_times():
         return {"status": "error", "message": str(e)}, 500
 
 # =========================
-# Основные маршруты
+# Основные маршруты Flask
 # =========================
 @app.route("/")
 def index():
@@ -680,11 +657,9 @@ def webhook():
             update = types.Update.de_json(json_string)
             print(f"[{datetime.now()}] Webhook: Успешно десериализовано обновление.") 
             
-            # НОВОЕ: СИНХРОННАЯ ОБРАБОТКА (самый надежный способ для pyTelegramBotAPI + Flask/Gunicorn)
-            # Если gunicorn настроен на несколько worker'ов, они сами обрабатывают параллелизм
+            # СИНХРОННАЯ ОБРАБОТКА (самый надежный способ для pyTelegramBotAPI + Flask/Gunicorn)
             bot.process_new_updates([update])
             
-            # УСПЕШНО:
             print(f"[{datetime.now()}] Webhook: Возвращен 200 OK после синхронной обработки.") 
             return "OK", 200
         except Exception as e:
@@ -694,6 +669,35 @@ def webhook():
     else:
         print(f"[{datetime.now()}] Webhook: Неверный тип контента.") 
         return "Invalid content type", 403
+
+# =========================
+# CATCH-ALL HANDLER ДЛЯ ДЕБАГА (ДОЛЖЕН БЫТЬ ПОСЛЕДНИМ)
+# =========================
+@bot.message_handler(func=lambda m: True)
+def default_handler(message: types.Message):
+    user_id = message.from_user.id
+    user_name = message.from_user.full_name or "Неизвестный"
+    
+    print(f"[{datetime.now()}] (Обработчик) ===> DEFAULT HANDLER HIT! Chat ID: {message.chat.id}, Content Type: '{message.content_type}', Text: '{message.text}'")
+    
+    if message.text:
+        # Проверяем, не является ли это сообщение текстом с клавиатуры
+        # Теперь, с порядком и 'in', этот блок должен срабатывать реже для кнопок
+        if any(keyword in message.text for keyword in ["Моя бронь", "Меню", "Управление", "История", "Забронировать"]):
+            print(f"[{datetime.now()}] (Обработчик) ===> Сообщение '{message.text}' - это кнопка, но она не была обработана соответствующим хендлером. Проблема в порядке хендлеров или точности текста.")
+            return 
+        
+        # Если это не кнопка и не команда (потому что /start не сработал)
+        try:
+            bot.send_message(
+                message.chat.id, 
+                "Извините, я понимаю только команды из меню или `/start`.",
+                reply_markup=main_reply_kb(user_id, user_name)
+            )
+            print(f"[{datetime.now()}] (Обработчик) ===> Отправлен ответ-заглушка пользователю {user_id}")
+        except Exception as e:
+            print(f"[{datetime.now()}] (Обработчик) Ошибка отправки ответа в default_handler: {e}")
+
 
 # =========================
 # MAIN

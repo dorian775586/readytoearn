@@ -40,7 +40,30 @@ if ADMIN_ID_ENV:
         print(f"Предупреждение: ADMIN_ID ('{ADMIN_ID_ENV}') не является числом; админ-функции отключены.")
 
 # =========================
-# DB INIT (Перемещено выше, перед вызовом init_db())
+# КОНСТАНТЫ МЕНЮ (ОБЯЗАТЕЛЬНО ПРОВЕРЬТЕ ССЫЛКИ!)
+# =========================
+RESTAURANT_NAME = "Mama Juana"
+# Базовый URL для ваших изображений. ОБНОВИТЕ, если ваш домен изменился.
+BASE_MENU_IMAGE_URL = "https://gitrepo-drab.vercel.app/images"
+
+MENU_CATEGORIES = {
+    "🥣 Закуски (Холодные)": f"{BASE_MENU_IMAGE_URL}/menu1.jpg",      # Соответствует скриншоту 1
+    "🌶️ Закуски (Горячие/Супы)": f"{BASE_MENU_IMAGE_URL}/menu2.jpg",   # Соответствует скриншоту 2
+    "🥗 Салаты": f"{BASE_MENU_IMAGE_URL}/menu3.jpg",                   # Соответствует скриншоту 3
+    "🍔 Бургеры": f"{BASE_MENU_IMAGE_URL}/menu4.jpg",                  # Соответствует скриншоту 4
+    "🌯 Сэндвичи & Роллы": f"{BASE_MENU_IMAGE_URL}/menu5.jpg",         # Соответствует скриншоту 5
+    "🍖 Основное (Говядина)": f"{BASE_MENU_IMAGE_URL}/menu6.jpg",      # Соответствует скриншоту 6
+    "🐟 Основное (Рыба/Свинина)": f"{BASE_MENU_IMAGE_URL}/menu7.jpg",  # Соответствует скриншоту 7
+    "🍗 Основное (Курица/Утка)": f"{BASE_MENU_IMAGE_URL}/menu8.jpg",   # Соответствует скриншоту 8
+    "🥩 Премиум Стейки": f"{BASE_MENU_IMAGE_URL}/menu9.jpg",           # Соответствует скриншоту 9
+    "☕ Десерты & Напитки": f"{BASE_MENU_IMAGE_URL}/menu10.jpg",        # Соответствует скриншоту 10
+}
+# URL для приветственной картинки
+WELCOME_PHOTO_URL = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSQEWj37bVRbDfps6Ltix6_DffSVFOFXNzNlg&s"
+
+
+# =========================
+# DB INIT
 # =========================
 def db_connect():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
@@ -78,20 +101,15 @@ def init_db():
                 # ========================================================
                 # ДОБАВЛЕНИЕ ИНДЕКСОВ ДЛЯ ОПТИМИЗАЦИИ
                 # ========================================================
-                # 1. Композитный индекс для быстрой проверки конфликтов (table_id, date, time)
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_conflict ON bookings (table_id, booking_for);")
-                
-                # 2. Индекс для быстрого поиска активной брони пользователя (Моя бронь)
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_user_active ON bookings (user_id, booking_for DESC);")
-                
-                # 3. Индекс для админ-панели и общей истории (сортировка и поиск)
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_future_time ON bookings (booking_for);")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_booked_at ON bookings (booked_at DESC);")
                 # ========================================================
 
                 # ========================================================
                 # ИЗМЕНЕНИЕ: Расширяем количество столов до 20,
-                #            добавляя только недостающие.
+                #            добавляя только недостающие.
                 # ========================================================
                 TARGET_TABLE_COUNT = 20
                 cur.execute("SELECT id FROM tables ORDER BY id ASC;")
@@ -120,7 +138,7 @@ app = Flask(__name__)
 CORS(app)
 
 # =======================================================
-# ВЫЗОВ ИНИЦИАЛИЗАЦИИ БД - ТЕПЕРЬ ПОСЛЕ ОПРЕДЕЛЕНИЯ init_db()
+# ВЫЗОВ ИНИЦИАЛИЗАЦИИ БД
 # =======================================================
 with app.app_context():
     init_db()
@@ -131,9 +149,11 @@ with app.app_context():
 def main_reply_kb(user_id: int, user_name: str) -> types.ReplyKeyboardMarkup:
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     
+    # Кнопка для запуска WebApp - используйте актуальный WEBAPP_URL
     web_app_url = f"{WEBAPP_URL}?user_id={user_id}&user_name={user_name}&bot_url={RENDER_EXTERNAL_URL}"
     
     row1 = [
+        types.KeyboardButton(text="🗓️ Забронировать", web_app=types.WebAppInfo(url=web_app_url)),
         types.KeyboardButton("📋 Моя бронь"),
     ]
     row2 = [types.KeyboardButton("📖 Меню")]
@@ -150,10 +170,12 @@ def main_reply_kb(user_id: int, user_name: str) -> types.ReplyKeyboardMarkup:
 def cmd_start(message: types.Message):
     user_id = message.from_user.id
     user_name = message.from_user.full_name or "Неизвестный"
+    
+    # Используем обновленную WELCOME_PHOTO_URL
     bot.send_photo(
         message.chat.id,
-        photo="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSQEWj37bVRbDfps6Ltix6_DffSVFOFXNzNlg&s", # ИЗМЕНЕНА ССЫЛКА НА КАРТИНКУ
-        caption="<b>Ресторан «Мама Хуана»</b> приветствует вас!\nТут вы можете дистанционно забронировать любой понравившийся столик!", # ИЗМЕНЕНО НАЗВАНИЕ
+        photo=WELCOME_PHOTO_URL, 
+        caption=f"<b>Ресторан «{RESTAURANT_NAME}»</b> приветствует вас!\nТут вы можете дистанционно забронировать любой понравившийся столик!",
         reply_markup=main_reply_kb(user_id, user_name),
         parse_mode="HTML"
     )
@@ -210,25 +232,26 @@ def on_my_booking(message: types.Message):
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка: {e}")
 
+# --- ОБНОВЛЕННАЯ ФУНКЦИЯ МЕНЮ (ИНТЕРАКТИВНОЕ) ---
 @bot.message_handler(func=lambda m: m.text == "📖 Меню")
 def on_menu(message: types.Message):
-    menu_photos = [
-        "https://gitrepo-drab.vercel.app/images/menu1.jpg",
-        "https://gitrepo-drab.vercel.app/images/menu2.jpg",
-        "https://gitrepo-drab.vercel.app/images/menu3.jpg",
-        "https://gitrepo-drab.vercel.app/images/menu4.jpg",
-        "https://gitrepo-drab.vercel.app/images/menu5.jpg",
-        "https://gitrepo-drab.vercel.app/images/menu6.jpg"
-    ]
+    """Отправляет клавиатуру с категориями меню."""
+    kb = types.InlineKeyboardMarkup(row_width=2) 
     
-    bot.send_message(message.chat.id, "Загружаю меню, подождите...")
-
-    for photo_url in menu_photos:
-        try:
-            bot.send_photo(message.chat.id, photo=photo_url)
-        except Exception as e:
-            bot.send_message(message.chat.id, f"Произошла ошибка при загрузке фото: {e}")
-            logging.error(f"Ошибка при отправке фото: {e}")
+    buttons = []
+    # Создаем кнопки, используя ключи из словаря MENU_CATEGORIES
+    for name in MENU_CATEGORIES.keys():
+        # В callback_data передаем префикс и название категории
+        buttons.append(types.InlineKeyboardButton(name, callback_data=f"menu_cat_{name}"))
+        
+    kb.add(*buttons)
+    
+    bot.send_message(
+        message.chat.id, 
+        "🍽️ Выберите интересующий вас раздел меню:",
+        reply_markup=kb
+    )
+# --------------------------------------------------
 
 # =========================
 # АДМИН-ПАНЕЛЬ
@@ -255,9 +278,9 @@ def on_admin_panel(message: types.Message):
         for r in rows:
             booking_date = r['booking_for'].strftime("%d.%m.%Y")
             text = f"🔖 Бронь #{r['booking_id']} — {r['user_name']}\n"
-            text += f"   - Стол: {r['table_id']}\n"
-            text += f"   - Время: {r['time_slot']} ({booking_date})\n"
-            text += f"   - Телефон: {r['phone']}\n"
+            text += f"   - Стол: {r['table_id']}\n"
+            text += f"   - Время: {r['time_slot']} ({booking_date})\n"
+            text += f"   - Телефон: {r['phone']}\n"
             
             kb = types.InlineKeyboardMarkup()
             kb.add(types.InlineKeyboardButton(text="❌ Отменить", callback_data=f"admin_cancel_{r['booking_id']}"))
@@ -273,6 +296,47 @@ def on_history_btn(message: types.Message):
 # =========================
 # CALLBACKS
 # =========================
+
+# --- НОВАЯ ФУНКЦИЯ: Обработчик категорий меню ---
+@bot.callback_query_handler(func=lambda c: c.data.startswith("menu_cat_"))
+def on_menu_category_select(call: types.CallbackQuery):
+    """Обрабатывает выбор категории меню и отправляет соответствующее фото."""
+    
+    category_name = call.data.split("menu_cat_")[1]
+    photo_url = MENU_CATEGORIES.get(category_name)
+    
+    # Создаем ту же клавиатуру для повторного выбора
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    buttons = [types.InlineKeyboardButton(name, callback_data=f"menu_cat_{name}") for name in MENU_CATEGORIES.keys()]
+    kb.add(*buttons)
+    
+    if photo_url:
+        try:
+            bot.send_photo(
+                call.message.chat.id, 
+                photo=photo_url,
+                caption=f"Раздел: <b>{category_name}</b>",
+                parse_mode="HTML"
+            )
+            
+            bot.send_message(
+                call.message.chat.id, 
+                "⬇️ Выберите следующий раздел:",
+                reply_markup=kb
+            )
+
+            bot.answer_callback_query(call.id, text=f"Открываю: {category_name}")
+            
+        except Exception as e:
+            logging.error(f"Ошибка при отправке фото меню ({photo_url}): {e}")
+            bot.send_message(call.message.chat.id, f"Произошла ошибка при загрузке раздела <b>{category_name}</b>. Проверьте URL изображения.", parse_mode="HTML")
+            bot.answer_callback_query(call.id, text="Ошибка загрузки.", show_alert=True)
+            
+    else:
+        bot.answer_callback_query(call.id, text="Раздел не найден.", show_alert=True)
+# --------------------------------------------------
+
+
 @bot.callback_query_handler(func=lambda c: c.data.startswith("cancel_"))
 def on_cancel_user(call: types.CallbackQuery):
     booking_id = int(call.data.split("_")[1])
@@ -322,9 +386,8 @@ def on_cancel_user(call: types.CallbackQuery):
                     print(f"Не удалось уведомить админа об отмене брони: {e}")
 
         else:
-             # Если 0 строк удалено (бронь уже отменена/не найдена)
-             bot.answer_callback_query(call.id, "Бронь уже была отменена или не найдена.", show_alert=True)
-             
+            bot.answer_callback_query(call.id, "Бронь уже была отменена или не найдена.", show_alert=True)
+            
     except Exception as e:
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
 
@@ -534,5 +597,4 @@ if __name__ == "__main__":
     except Exception as e:
         print("Ошибка установки webhook:", e)
     
-    # app.run(host="0.0.0.0", port=port)
     app.run(host="0.0.0.0", port=port)

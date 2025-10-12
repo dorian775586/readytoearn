@@ -1,9 +1,9 @@
 import os
 import logging
 from datetime import datetime, timedelta, date
-import threading # НУЖНО ДЛЯ ПОТОКОВ
-import requests # Нужен для проверки URL, но не для фото теперь
-import json # НУЖНО ДЛЯ web_app_data
+import threading 
+import requests 
+import json 
 
 from flask import Flask, request, jsonify
 from telebot import TeleBot, types
@@ -15,7 +15,7 @@ from flask_cors import CORS
 # ЛОГИРОВАНИЕ
 # =========================
 logging.basicConfig(level=logging.INFO)
-print("Логирование настроено.") # Лог старта скрипта
+print("Логирование настроено.") 
 
 # =========================
 # ENV
@@ -23,8 +23,8 @@ print("Логирование настроено.") # Лог старта скр
 BOT_TOKEN = (os.environ.get("BOT_TOKEN") or "").strip()
 DATABASE_URL = (os.environ.get("DATABASE_URL") or "").strip()
 ADMIN_ID_ENV = (os.environ.get("ADMIN_ID") or "").strip()
-WEBAPP_URL = (os.environ.get("WEBAPP_URL") or "https://gitrepo-drab.vercel.app").strip() # WebApp сам по себе
-RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL") # URL для webhook бота на Render
+WEBAPP_URL = (os.environ.get("WEBAPP_URL") or "https://gitrepo-drab.vercel.app").strip() 
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL") 
 
 print(f"BOT_TOKEN_STATUS: {'SET' if BOT_TOKEN else 'NOT SET'}")
 print(f"DATABASE_URL_STATUS: {'SET' if DATABASE_URL else 'NOT SET'}")
@@ -34,7 +34,7 @@ if not BOT_TOKEN:
     raise RuntimeError("Ошибка: BOT_TOKEN пуст или не задан!")
 if not DATABASE_URL:
     raise RuntimeError("Ошибка: DATABASE_URL не задан!")
-if not RENDER_EXTERNAL_URL: # RENDER_EXTERNAL_URL нужен для Webhook
+if not RENDER_EXTERNAL_URL: 
     raise RuntimeError("Ошибка: RENDER_EXTERNAL_URL не задан! Проверьте переменные окружения на Render.")
 
 
@@ -54,7 +54,6 @@ if ADMIN_ID_ENV:
 # =========================
 RESTAURANT_NAME = "Белый Лис"
 
-# Категории меню теперь без URL изображений
 MENU_CATEGORIES = [
     "🥣 Закуски (Холодные)",
     "🌶️ Закуски (Горячие/Супы)",
@@ -132,7 +131,7 @@ bot = TeleBot(BOT_TOKEN, parse_mode="HTML")
 app = Flask(__name__)
 CORS(app)
 
-with app.app_context(): # Правильно вызываем init_db
+with app.app_context(): 
     init_db()
 
 # =========================
@@ -164,7 +163,6 @@ def cmd_start(message: types.Message):
     user_name = message.from_user.full_name or "Неизвестный"
     
     try:
-        # УДАЛЕНА ОТПРАВКА ПРИВЕТСТВЕННОГО ФОТО - ТОЛЬКО ТЕКСТ
         bot.send_message(
             message.chat.id,
             f"<b>Рестобар «{RESTAURANT_NAME}»</b> приветствует вас!\nТут вы можете дистанционно забронировать любой понравившийся столик!",
@@ -241,7 +239,7 @@ def on_menu(message: types.Message):
     kb = types.InlineKeyboardMarkup(row_width=2) 
     
     buttons = []
-    for name in MENU_CATEGORIES: # Итерируем по списку, а не по словарю
+    for name in MENU_CATEGORIES: 
         buttons.append(types.InlineKeyboardButton(name, callback_data=f"menu_cat_{name}"))
         
     kb.add(*buttons)
@@ -312,10 +310,9 @@ def on_menu_category_select(call: types.CallbackQuery):
     kb.add(*buttons)
     
     try:
-        # УДАЛЕНА ОТПРАВКА ФОТО МЕНЮ - ТОЛЬКО ТЕКСТ
         bot.send_message(
             call.message.chat.id, 
-            f"Раздел: <b>{category_name}</b>\n\nЗдесь должно быть описание или список блюд.", # Упрощенный текст
+            f"Раздел: <b>{category_name}</b>\n\nЗдесь должно быть описание или список блюд.", 
             parse_mode="HTML"
         )
         
@@ -425,7 +422,7 @@ def on_cancel_admin(call: types.CallbackQuery):
 
 @bot.message_handler(content_types=['web_app_data'])
 def on_webapp_data(message: types.Message):
-    print(f"[{datetime.now()}] (Поток) ПРИШЛИ ДАННЫЕ ОТ WEBAPP: {message.web_app_data.data}") # Добавлено логирование
+    print(f"[{datetime.now()}] (Поток) ПРИШЛИ ДАННЫЕ ОТ WEBAPP: {message.web_app_data.data}") 
     try:
         data = json.loads(message.web_app_data.data)
         user_id = message.from_user.id
@@ -491,7 +488,6 @@ def on_webapp_data(message: types.Message):
 # =========================
 # BOOKING API
 # =========================
-# Эти маршруты API для WebApp, они не были затронуты удалением фото.
 @app.route("/book", methods=["POST"])
 def book_api():
     print(f"[{datetime.now()}] Получен POST запрос на /book")
@@ -622,7 +618,7 @@ def index():
 
 @app.route("/set_webhook_manual")
 def set_webhook_manual():
-    print(f"[{datetime.now()}] Получен GET запрос на /set_webhook_manual") # Добавлено логирование
+    print(f"[{datetime.now()}] Получен GET запрос на /set_webhook_manual") 
     if not RENDER_EXTERNAL_URL:
         return jsonify({"status": "error", "message": "RENDER_EXTERNAL_URL is not set"}), 500
     if not RENDER_EXTERNAL_URL.startswith("https://"):
@@ -630,37 +626,52 @@ def set_webhook_manual():
     
     webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
     try:
-        bot.remove_webhook() # Добавлено удаление старого
-        print(f"[{datetime.now()}] Старый Webhook удален.") # Добавлено логирование
+        # УДАЛЕНИЕ + УСТАНОВКА
+        bot.remove_webhook() 
+        print(f"[{datetime.now()}] Старый Webhook удален.") 
         ok = bot.set_webhook(url=webhook_url)
-        print(f"[{datetime.now()}] Попытка установки Webhook на {webhook_url}; Результат: {ok}") # Добавлено логирование
+        print(f"[{datetime.now()}] Попытка установки Webhook на {webhook_url}; Результат: {ok}") 
         if ok:
             return jsonify({"status": "ok", "message": f"Webhook set to {webhook_url}"}), 200
         else:
             return jsonify({"status": "error", "message": "Failed to set webhook"}), 500
     except Exception as e:
-        print(f"[{datetime.now()}] Ошибка при установке Webhook вручную: {e}") # Добавлено логирование
+        print(f"[{datetime.now()}] Ошибка при установке Webhook вручную: {e}") 
         return jsonify({"status": "error", "message": str(e)}), 500
+
+# Функция для обработки обновления в отдельном потоке (новое!)
+def process_update_in_thread(upd):
+    print(f"[{datetime.now()}] (Поток): Начало обработки обновления update_id={upd.update_id}")
+    try:
+        # Здесь будет вызвана функция cmd_start
+        bot.process_new_updates([upd])
+        print(f"[{datetime.now()}] (Поток): Завершение обработки обновления update_id={upd.update_id}")
+    except Exception as e:
+        # Логирование критической ошибки, если process_new_updates терпит крах
+        print(f"[{datetime.now()}] (Поток): ОШИБКА при обработке обновления update_id={upd.update_id}: {e}")
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    print(f"[{datetime.now()}] Получен POST запрос на /webhook") # Добавлено логирование
+    print(f"[{datetime.now()}] Получен POST запрос на /webhook") 
     if request.headers.get("content-type") == "application/json":
         json_string = request.get_data(as_text=True)
-        print(f"[{datetime.now()}] Webhook: Получены данные: {json_string[:500]}...") # Добавлено логирование
+        # Убрана строка с полным JSON для краткости, если проблема в обработке. 
+        # Если не сработает, вернем обратно.
+        print(f"[{datetime.now()}] Webhook: Получены данные. Длина: {len(json_string)}") 
         try:
             update = types.Update.de_json(json_string)
-            print(f"[{datetime.now()}] Webhook: Успешно десериализовано обновление.") # Добавлено логирование
-            # Передаем обработку обновления в отдельный поток
-            threading.Thread(target=bot.process_new_updates, args=([update],)).start() # Обработка в потоке
+            print(f"[{datetime.now()}] Webhook: Успешно десериализовано обновление.") 
             
-            print(f"[{datetime.now()}] Webhook: Возвращен 200 OK. Обработка передана в поток.") # Добавлено логирование
+            # !!! КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Запуск потока с новой функцией логирования !!!
+            threading.Thread(target=process_update_in_thread, args=(update,)).start() 
+            
+            print(f"[{datetime.now()}] Webhook: Возвращен 200 OK. Обработка передана в поток.") 
             return "OK", 200
         except Exception as e:
-            print(f"[{datetime.now()}] Webhook: ОШИБКА десериализации обновления: {e}") # Добавлено логирование
-            return "Error processing update", 500 # Отправляем 500, чтобы Telegram перестал слать битые данные
+            print(f"[{datetime.now()}] Webhook: ОШИБКА десериализации обновления: {e}") 
+            return "Error processing update", 500 
     else:
-        print(f"[{datetime.now()}] Webhook: Неверный тип контента.") # Добавлено логирование
+        print(f"[{datetime.now()}] Webhook: Неверный тип контента.") 
         return "Invalid content type", 403
 
 # =========================
@@ -668,9 +679,6 @@ def webhook():
 # =========================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    print(f"[{datetime.now()}] Запуск Flask-приложения на порту {port}") # Добавлено логирование
-
-    # Перемещаем init_db сюда, чтобы он точно выполнился перед запуском Flask
-    # init_db() # Убрано отсюда, так как уже вызывается в app.app_context()
+    print(f"[{datetime.now()}] Запуск Flask-приложения на порту {port}") 
     
     app.run(host="0.0.0.0", port=port)

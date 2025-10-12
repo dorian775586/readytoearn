@@ -1,6 +1,7 @@
 import os
 import logging
 from datetime import datetime, timedelta, date
+import threading # <<< НОВЫЙ ИМПОРТ
 
 from flask import Flask, request, jsonify
 from telebot import TeleBot, types
@@ -19,7 +20,8 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = (os.environ.get("BOT_TOKEN") or "").strip()
 DATABASE_URL = (os.environ.get("DATABASE_URL") or "").strip()
 ADMIN_ID_ENV = (os.environ.get("ADMIN_ID") or "").strip()
-WEBAPP_URL = (os.environ.get("WEBAPP_URL") or "https://gitrepo-drab.vercel.app").strip()
+# ОБНОВИТЕ, если ваш домен изменился
+WEBAPP_URL = (os.environ.get("WEBAPP_URL") or "https://gitrepo-drab.vercel.app").strip() 
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 
 if not BOT_TOKEN:
@@ -42,25 +44,24 @@ if ADMIN_ID_ENV:
 # =========================
 # КОНСТАНТЫ МЕНЮ (ОБЯЗАТЕЛЬНО ПРОВЕРЬТЕ ССЫЛКИ!)
 # =========================
-RESTAURANT_NAME = "Mama Juana"
+RESTAURANT_NAME = "Mama Juana" # Или ваше актуальное имя ресторана
 # Базовый URL для ваших изображений. ОБНОВИТЕ, если ваш домен изменился.
 BASE_MENU_IMAGE_URL = "https://gitrepo-drab.vercel.app/images"
 
 MENU_CATEGORIES = {
-    "🥣 Закуски (Холодные)": f"{BASE_MENU_IMAGE_URL}/menu1.jpg",      # Соответствует скриншоту 1
-    "🌶️ Закуски (Горячие/Супы)": f"{BASE_MENU_IMAGE_URL}/menu2.jpg",   # Соответствует скриншоту 2
-    "🥗 Салаты": f"{BASE_MENU_IMAGE_URL}/menu3.jpg",                   # Соответствует скриншоту 3
-    "🍔 Бургеры": f"{BASE_MENU_IMAGE_URL}/menu4.jpg",                  # Соответствует скриншоту 4
-    "🌯 Сэндвичи & Роллы": f"{BASE_MENU_IMAGE_URL}/menu5.jpg",         # Соответствует скриншоту 5
-    "🍖 Основное (Говядина)": f"{BASE_MENU_IMAGE_URL}/menu6.jpg",      # Соответствует скриншоту 6
-    "🐟 Основное (Рыба/Свинина)": f"{BASE_MENU_IMAGE_URL}/menu7.jpg",  # Соответствует скриншоту 7
-    "🍗 Основное (Курица/Утка)": f"{BASE_MENU_IMAGE_URL}/menu8.jpg",   # Соответствует скриншоту 8
-    "🥩 Премиум Стейки": f"{BASE_MENU_IMAGE_URL}/menu9.jpg",           # Соответствует скриншоту 9
-    "☕ Десерты & Напитки": f"{BASE_MENU_IMAGE_URL}/menu10.jpg",        # Соответствует скриншоту 10
+    "🥣 Закуски (Холодные)": f"{BASE_MENU_IMAGE_URL}/menu1.jpg",
+    "🌶️ Закуски (Горячие/Супы)": f"{BASE_MENU_IMAGE_URL}/menu2.jpg",
+    "🥗 Салаты": f"{BASE_MENU_IMAGE_URL}/menu3.jpg",
+    "🍔 Бургеры": f"{BASE_MENU_IMAGE_URL}/menu4.jpg",
+    "🌯 Сэндвичи & Роллы": f"{BASE_MENU_IMAGE_URL}/menu5.jpg",
+    "🍖 Основное (Говядина)": f"{BASE_MENU_IMAGE_URL}/menu6.jpg",
+    "🐟 Основное (Рыба/Свинина)": f"{BASE_MENU_IMAGE_URL}/menu7.jpg",
+    "🍗 Основное (Курица/Утка)": f"{BASE_MENU_IMAGE_URL}/menu8.jpg",
+    "🥩 Премиум Стейки": f"{BASE_MENU_IMAGE_URL}/menu9.jpg",
+    "☕ Десерты & Напитки": f"{BASE_MENU_IMAGE_URL}/menu10.jpg",
 }
 # URL для приветственной картинки
-WELCOME_PHOTO_URL = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSQEWj37bVRbDfps6Ltix6_DffSVFOFXNzNlg&s"
-
+WELCOME_PHOTO_URL = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSQEWj37bVRbDfps6Ltix6_DffSVFOFXNzNlg&s" # Актуальный URL для приветственного фото
 
 # =========================
 # DB INIT
@@ -72,7 +73,6 @@ def init_db():
     try:
         with db_connect() as conn:
             with conn.cursor() as cur:
-                # Таблицы
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS tables (
                     id INT PRIMARY KEY
@@ -91,39 +91,28 @@ def init_db():
                     booking_for TIMESTAMP
                 );
                 """)
-                # Добавляем колонки на всякий случай
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS user_id BIGINT;")
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS user_name TEXT;")
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS phone TEXT;")
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS guests INT;")
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_for TIMESTAMP;")
                 
-                # ========================================================
-                # ДОБАВЛЕНИЕ ИНДЕКСОВ ДЛЯ ОПТИМИЗАЦИИ
-                # ========================================================
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_conflict ON bookings (table_id, booking_for);")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_user_active ON bookings (user_id, booking_for DESC);")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_future_time ON bookings (booking_for);")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_booked_at ON bookings (booked_at DESC);")
-                # ========================================================
 
-                # ========================================================
-                # ИЗМЕНЕНИЕ: Расширяем количество столов до 20,
-                #            добавляя только недостающие.
-                # ========================================================
                 TARGET_TABLE_COUNT = 20
                 cur.execute("SELECT id FROM tables ORDER BY id ASC;")
                 existing_table_ids = [row['id'] for row in cur.fetchall()]
                 tables_to_add = [i for i in range(1, TARGET_TABLE_COUNT + 1) if i not in existing_table_ids]
                 
                 if tables_to_add:
-                    # Создаем строку для множественной вставки: (1), (2), (3)...
                     insert_values = ",".join(f"({i})" for i in tables_to_add)
                     cur.execute(f"INSERT INTO tables (id) VALUES {insert_values};")
                     print(f"База данных: Добавлено {len(tables_to_add)} новых столов (ID: {tables_to_add}).")
                 else:
                     print("База данных: Все столы до 20 уже существуют.")
-                # ========================================================
 
             conn.commit()
         print("База данных: OK")
@@ -137,9 +126,6 @@ bot = TeleBot(BOT_TOKEN, parse_mode="HTML")
 app = Flask(__name__)
 CORS(app)
 
-# =======================================================
-# ВЫЗОВ ИНИЦИАЛИЗАЦИИ БД
-# =======================================================
 with app.app_context():
     init_db()
 
@@ -149,7 +135,6 @@ with app.app_context():
 def main_reply_kb(user_id: int, user_name: str) -> types.ReplyKeyboardMarkup:
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     
-    # Кнопка для запуска WebApp - используйте актуальный WEBAPP_URL
     web_app_url = f"{WEBAPP_URL}?user_id={user_id}&user_name={user_name}&bot_url={RENDER_EXTERNAL_URL}"
     
     row1 = [
@@ -171,7 +156,6 @@ def cmd_start(message: types.Message):
     user_id = message.from_user.id
     user_name = message.from_user.full_name or "Неизвестный"
     
-    # Используем обновленную WELCOME_PHOTO_URL
     bot.send_photo(
         message.chat.id,
         photo=WELCOME_PHOTO_URL, 
@@ -239,9 +223,7 @@ def on_menu(message: types.Message):
     kb = types.InlineKeyboardMarkup(row_width=2) 
     
     buttons = []
-    # Создаем кнопки, используя ключи из словаря MENU_CATEGORIES
     for name in MENU_CATEGORIES.keys():
-        # В callback_data передаем префикс и название категории
         buttons.append(types.InlineKeyboardButton(name, callback_data=f"menu_cat_{name}"))
         
     kb.add(*buttons)
@@ -305,7 +287,6 @@ def on_menu_category_select(call: types.CallbackQuery):
     category_name = call.data.split("menu_cat_")[1]
     photo_url = MENU_CATEGORIES.get(category_name)
     
-    # Создаем ту же клавиатуру для повторного выбора
     kb = types.InlineKeyboardMarkup(row_width=2)
     buttons = [types.InlineKeyboardButton(name, callback_data=f"menu_cat_{name}") for name in MENU_CATEGORIES.keys()]
     kb.add(*buttons)
@@ -346,7 +327,6 @@ def on_cancel_user(call: types.CallbackQuery):
         
         with db_connect() as conn:
             with conn.cursor() as cur:
-                # 1. Получаем информацию о бронировании ДО удаления
                 cur.execute("""
                     SELECT user_id, user_name, table_id, time_slot, booking_for, phone, guests
                     FROM bookings
@@ -354,7 +334,6 @@ def on_cancel_user(call: types.CallbackQuery):
                 """, (booking_id, call.from_user.id))
                 booking_info = cur.fetchone()
                 
-                # 2. Удаляем бронирование
                 cur.execute("DELETE FROM bookings WHERE booking_id=%s AND user_id=%s;", (booking_id, call.from_user.id))
                 rows_deleted = cur.rowcount
                 conn.commit()
@@ -362,12 +341,10 @@ def on_cancel_user(call: types.CallbackQuery):
         if rows_deleted > 0:
             bot.edit_message_text("Бронь отменена.", chat_id=call.message.chat.id, message_id=call.message.id)
             
-            # 3. Уведомление администратора
             if ADMIN_ID and booking_info:
                 try:
                     booking_date = booking_info['booking_for'].strftime("%d.%m.%Y")
                     user_id = booking_info['user_id']
-                    # Используем полное имя пользователя из call.from_user.full_name, если user_name в базе пуст
                     user_name = booking_info['user_name'] or call.from_user.full_name or 'Неизвестный пользователь'
                     user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
                     
@@ -450,7 +427,6 @@ def book_api():
         conn = psycopg2.connect(DATABASE_URL)
 
         with conn.cursor() as cursor:
-            # ПРОВЕРКА НА ДУБЛИКАТ
             cursor.execute(
                 "SELECT 1 FROM bookings WHERE table_id = %s AND booking_for::date = %s AND time_slot = %s;",
                 (table_id, booking_date, time_slot)
@@ -460,7 +436,6 @@ def book_api():
                 return {"status": "error", "message": "Этот стол уже забронирован на это время."}, 409
         
         with conn.cursor() as cursor:
-            # СОЗДАНИЕ БРОНИ
             cursor.execute(
                 """
                 INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
@@ -470,7 +445,6 @@ def book_api():
             )
             conn.commit()
             
-        # уведомления пользователю
         try:
             formatted_date = booking_date.strftime("%d.%m.%Y")
             message_text = f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}"
@@ -478,7 +452,6 @@ def book_api():
         except Exception as e:
             print(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
 
-        # уведомление админу
         if ADMIN_ID:
             try:
                 formatted_date = booking_date.strftime("%d.%m.%Y")
@@ -528,7 +501,6 @@ def get_booked_times():
             )
             booked_times = [row['time_slot'] for row in cursor.fetchall()]
 
-        # генерация всех слотов с 12:00 до 23:00
         start_time = datetime.combine(query_date, datetime.strptime("12:00", "%H:%M").time())
         end_time = datetime.combine(query_date, datetime.strptime("23:00", "%H:%M").time())
         current_time = start_time
@@ -569,12 +541,18 @@ def set_webhook_manual():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+# <<< ИСПРАВЛЕННАЯ ФУНКЦИЯ WEBHOOK >>>
 @app.route("/webhook", methods=["POST"])
 def webhook():
     if request.headers.get("content-type") == "application/json":
         json_string = request.get_data(as_text=True)
         update = types.Update.de_json(json_string)
-        bot.process_new_updates([update])
+        
+        # Передаем обработку обновления в отдельный поток
+        # Это позволяет Flask немедленно вернуть 200 OK Telegram, 
+        # предотвращая таймауты, пока bot.process_new_updates работает в фоне.
+        threading.Thread(target=bot.process_new_updates, args=([update],)).start()
+        
         return "OK", 200
     else:
         return "Invalid content type", 403
@@ -597,4 +575,6 @@ if __name__ == "__main__":
     except Exception as e:
         print("Ошибка установки webhook:", e)
     
-    app.run(host="0.0.0.0", port=port)
+    # Запускаем приложение Flask. На Render это обычно делается через Gunicorn
+    # (см. Procfile), но эта строка нужна для локального тестирования.
+    app.run(host="0.0.0.0", port=port) 

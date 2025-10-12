@@ -127,7 +127,9 @@ def init_db():
 # =========================
 # BOT & APP
 # =========================
-bot = TeleBot(BOT_TOKEN, parse_mode="HTML")
+# КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: threaded=False, чтобы избежать конфликтов с Flask/Gunicorn и Webhook.
+# Flask и Gunicorn уже сами по себе многопоточны.
+bot = TeleBot(BOT_TOKEN, parse_mode="HTML", threaded=False) 
 app = Flask(__name__)
 CORS(app)
 
@@ -158,7 +160,7 @@ def main_reply_kb(user_id: int, user_name: str) -> types.ReplyKeyboardMarkup:
 # =========================
 @bot.message_handler(commands=["start"])
 def cmd_start(message: types.Message):
-    print(f"[{datetime.now()}] (Поток) Получена команда /start от user_id: {message.from_user.id}")
+    print(f"[{datetime.now()}] (Обработчик) Получена команда /start от user_id: {message.from_user.id}")
     user_id = message.from_user.id
     user_name = message.from_user.full_name or "Неизвестный"
     
@@ -169,19 +171,19 @@ def cmd_start(message: types.Message):
             reply_markup=main_reply_kb(user_id, user_name),
             parse_mode="HTML"
         )
-        print(f"[{datetime.now()}] (Поток) Отправлено приветственное текстовое сообщение для user_id: {user_id}")
+        print(f"[{datetime.now()}] (Обработчик) Отправлено приветственное текстовое сообщение для user_id: {user_id}")
     except Exception as e:
-        print(f"[{datetime.now()}] (Поток) КРИТИЧЕСКАЯ ОШИБКА при отправке приветственного сообщения user_id: {user_id}: {e}")
+        print(f"[{datetime.now()}] (Обработчик) КРИТИЧЕСКАЯ ОШИБКА при отправке приветственного сообщения user_id: {user_id}: {e}")
         try:
             bot.send_message(message.chat.id, "Извините, произошла ошибка при загрузке приветствия. Пожалуйста, проверьте мой статус или попробуйте позже.")
-            print(f"[{datetime.now()}] (Поток) Отправлено сообщение об ошибке пользователю {user_id}")
+            print(f"[{datetime.now()}] (Обработчик) Отправлено сообщение об ошибке пользователю {user_id}")
         except Exception as e_inner:
-            print(f"[{datetime.now()}] (Поток) НЕ УДАЛОСЬ ОТПРАВИТЬ СООБЩЕНИЕ ОБ ОШИБКЕ пользователю {user_id}: {e_inner}")
+            print(f"[{datetime.now()}] (Обработчик) НЕ УДАЛОСЬ ОТПРАВИТЬ СООБЩЕНИЕ ОБ ОШИБКЕ пользователю {user_id}: {e_inner}")
 
 
 @bot.message_handler(commands=["history"])
 def cmd_history(message: types.Message):
-    print(f"[{datetime.now()}] (Поток) Получена команда /history от user_id: {message.from_user.id}")
+    print(f"[{datetime.now()}] (Обработчик) Получена команда /history от user_id: {message.from_user.id}")
     if not ADMIN_ID or str(message.chat.id) != str(ADMIN_ID):
         bot.send_message(message.chat.id, "У вас нет прав для этой команды.")
         return
@@ -208,7 +210,7 @@ def cmd_history(message: types.Message):
 
 @bot.message_handler(func=lambda m: m.text == "📋 Моя бронь")
 def on_my_booking(message: types.Message):
-    print(f"[{datetime.now()}] (Поток) Нажата кнопка 'Моя бронь' от user_id: {message.from_user.id}")
+    print(f"[{datetime.now()}] (Обработчик) Нажата кнопка 'Моя бронь' от user_id: {message.from_user.id}")
     try:
         with db_connect() as conn:
             with conn.cursor() as cur:
@@ -235,7 +237,7 @@ def on_my_booking(message: types.Message):
 
 @bot.message_handler(func=lambda m: m.text == "📖 Меню")
 def on_menu(message: types.Message):
-    print(f"[{datetime.now()}] (Поток) Нажата кнопка 'Меню' от user_id: {message.from_user.id}")
+    print(f"[{datetime.now()}] (Обработчик) Нажата кнопка 'Меню' от user_id: {message.from_user.id}")
     kb = types.InlineKeyboardMarkup(row_width=2) 
     
     buttons = []
@@ -250,9 +252,9 @@ def on_menu(message: types.Message):
             "🍽️ Выберите интересующий вас раздел меню:",
             reply_markup=kb
         )
-        print(f"[{datetime.now()}] (Поток) Отправлено меню с категориями для user_id: {message.from_user.id}")
+        print(f"[{datetime.now()}] (Обработчик) Отправлено меню с категориями для user_id: {message.from_user.id}")
     except Exception as e:
-        print(f"[{datetime.now()}] (Поток) Ошибка при отправке меню user_id: {message.from_user.id}: {e}")
+        print(f"[{datetime.now()}] (Обработчик) Ошибка при отправке меню user_id: {message.from_user.id}: {e}")
         bot.send_message(message.chat.id, "Извините, произошла ошибка при загрузке меню. Попробуйте позже.")
 
 # =========================
@@ -263,12 +265,12 @@ def default_handler(message: types.Message):
     user_id = message.from_user.id
     user_name = message.from_user.full_name or "Неизвестный"
     
-    print(f"[{datetime.now()}] (Поток) ===> DEFAULT HANDLER HIT! Chat ID: {message.chat.id}, Content Type: '{message.content_type}', Text: '{message.text}'")
+    print(f"[{datetime.now()}] (Обработчик) ===> DEFAULT HANDLER HIT! Chat ID: {message.chat.id}, Content Type: '{message.content_type}', Text: '{message.text}'")
     
     if message.text:
         # Проверяем, не является ли это сообщение текстом с клавиатуры
         if message.text in ["📋 Моя бронь", "📖 Меню", "🛠 Управление", "🗂 История"]:
-            print(f"[{datetime.now()}] (Поток) ===> Сообщение '{message.text}' - это кнопка, но она не была обработана соответствующим хендлером. Проблема в порядке хендлеров.")
+            print(f"[{datetime.now()}] (Обработчик) ===> Сообщение '{message.text}' - это кнопка, но она не была обработана соответствующим хендлером. Проблема в порядке хендлеров.")
             # Здесь не нужно отправлять ответ, чтобы не мешать другим хендлерам.
             return 
         
@@ -279,9 +281,9 @@ def default_handler(message: types.Message):
                 "Извините, я понимаю только команды из меню или `/start`.",
                 reply_markup=main_reply_kb(user_id, user_name)
             )
-            print(f"[{datetime.now()}] (Поток) ===> Отправлен ответ-заглушка пользователю {user_id}")
+            print(f"[{datetime.now()}] (Обработчик) ===> Отправлен ответ-заглушка пользователю {user_id}")
         except Exception as e:
-            print(f"[{datetime.now()}] (Поток) Ошибка отправки ответа в default_handler: {e}")
+            print(f"[{datetime.now()}] (Обработчик) Ошибка отправки ответа в default_handler: {e}")
 
 
 # =========================
@@ -289,7 +291,7 @@ def default_handler(message: types.Message):
 # =========================
 @bot.message_handler(func=lambda m: m.text == "🛠 Управление")
 def on_admin_panel(message: types.Message):
-    print(f"[{datetime.now()}] (Поток) Нажата кнопка 'Управление' от user_id: {message.from_user.id}")
+    print(f"[{datetime.now()}] (Обработчик) Нажата кнопка 'Управление' от user_id: {message.from_user.id}")
     if not ADMIN_ID or str(message.chat.id) != str(ADMIN_ID):
         bot.send_message(message.chat.id, "У вас нет прав для этой команды.")
         return
@@ -331,7 +333,7 @@ def on_history_btn(message: types.Message):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("menu_cat_"))
 def on_menu_category_select(call: types.CallbackQuery):
-    print(f"[{datetime.now()}] (Поток) Получен callback от кнопки меню '{call.data}' от user_id: {call.from_user.id}")
+    print(f"[{datetime.now()}] (Обработчик) Получен callback от кнопки меню '{call.data}' от user_id: {call.from_user.id}")
     category_name = call.data.split("menu_cat_")[1]
     
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -352,16 +354,16 @@ def on_menu_category_select(call: types.CallbackQuery):
         )
 
         bot.answer_callback_query(call.id, text=f"Открываю: {category_name}")
-        print(f"[{datetime.now()}] (Поток) Отправлено текстовое меню для категории '{category_name}' user_id: {call.from_user.id}")
+        print(f"[{datetime.now()}] (Обработчик) Отправлено текстовое меню для категории '{category_name}' user_id: {call.from_user.id}")
         
     except Exception as e:
-        logging.error(f"[{datetime.now()}] (Поток) Ошибка при отправке текстового меню для user_id: {call.from_user.id}: {e}")
+        logging.error(f"[{datetime.now()}] (Обработчик) Ошибка при отправке текстового меню для user_id: {call.from_user.id}: {e}")
         bot.send_message(call.message.chat.id, f"Произошла ошибка при загрузке раздела <b>{category_name}</b>.", parse_mode="HTML")
         bot.answer_callback_query(call.id, text="Ошибка загрузки.", show_alert=True)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("cancel_"))
 def on_cancel_user(call: types.CallbackQuery):
-    print(f"[{datetime.now()}] (Поток) Получен callback для отмены брони пользователем '{call.data}' от user_id: {call.from_user.id}")
+    print(f"[{datetime.now()}] (Обработчик) Получен callback для отмены брони пользователем '{call.data}' от user_id: {call.from_user.id}")
     booking_id = int(call.data.split("_")[1])
     try:
         booking_info = None
@@ -382,7 +384,7 @@ def on_cancel_user(call: types.CallbackQuery):
         
         if rows_deleted > 0:
             bot.edit_message_text("Бронь отменена.", chat_id=call.message.chat.id, message_id=call.message.id)
-            print(f"[{datetime.now()}] (Поток) Бронь #{booking_id} отменена пользователем {call.from_user.id}")
+            print(f"[{datetime.now()}] (Обработчик) Бронь #{booking_id} отменена пользователем {call.from_user.id}")
             
             if ADMIN_ID and booking_info:
                 try:
@@ -402,22 +404,22 @@ def on_cancel_user(call: types.CallbackQuery):
                         f"Телефон: {booking_info.get('phone', 'Не указан')}"
                     )
                     bot.send_message(ADMIN_ID, message_text, parse_mode="HTML")
-                    print(f"[{datetime.now()}] (Поток) Уведомление админа об отмене брони #{booking_id} отправлено.")
+                    print(f"[{datetime.now()}] (Обработчик) Уведомление админа об отмене брони #{booking_id} отправлено.")
                 except Exception as e:
-                    print(f"[{datetime.now()}] (Поток) Не удалось уведомить админа об отмене брони: {e}")
+                    print(f"[{datetime.now()}] (Обработчик) Не удалось уведомить админа об отмене брони: {e}")
 
         else:
             bot.answer_callback_query(call.id, "Бронь уже была отменена или не найдена.", show_alert=True)
-            print(f"[{datetime.now()}] (Поток) Пользователь {call.from_user.id} пытался отменить несуществующую/уже отмененную бронь #{booking_id}")
+            print(f"[{datetime.now()}] (Обработчик) Пользователь {call.from_user.id} пытался отменить несуществующую/уже отмененную бронь #{booking_id}")
             
     except Exception as e:
-        print(f"[{datetime.now()}] (Поток) Ошибка при отмене брони пользователем {call.from_user.id} брони #{booking_id}: {e}")
+        print(f"[{datetime.now()}] (Обработчик) Ошибка при отмене брони пользователем {call.from_user.id} брони #{booking_id}: {e}")
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("admin_cancel_"))
 def on_cancel_admin(call: types.CallbackQuery):
-    print(f"[{datetime.now()}] (Поток) Получен callback для отмены брони админом '{call.data}' от user_id: {call.from_user.id}")
+    print(f"[{datetime.now()}] (Обработчик) Получен callback для отмены брони админом '{call.data}' от user_id: {call.from_user.id}")
     booking_id = int(call.data.split("_")[2])
     if not ADMIN_ID or str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "У вас нет прав для этого действия.", show_alert=True)
@@ -438,20 +440,20 @@ def on_cancel_admin(call: types.CallbackQuery):
             message_text = f"❌ Ваша бронь отменена администратором.\n\nСтол: {booking_info['table_id']}\nДата: {booking_date}\nВремя: {booking_info['time_slot']}"
             try:
                 bot.send_message(user_id, message_text)
-                print(f"[{datetime.now()}] (Поток) Уведомление пользователю {user_id} об отмене брони #{booking_id} отправлено.")
+                print(f"[{datetime.now()}] (Обработчик) Уведомление пользователю {user_id} об отмене брони #{booking_id} отправлено.")
             except Exception as e:
-                print(f"[{datetime.now()}] (Поток) Не удалось уведомить пользователя {user_id} об отмене брони: {e}")
+                print(f"[{datetime.now()}] (Обработчик) Не удалось уведомить пользователя {user_id} об отмене брони: {e}")
 
         bot.edit_message_text(f"Бронь #{booking_id} успешно отменена.", chat_id=call.message.chat.id, message_id=call.message.id)
         bot.answer_callback_query(call.id, "Бронь отменена.", show_alert=True)
-        print(f"[{datetime.now()}] (Поток) Бронь #{booking_id} отменена админом {call.from_user.id}")
+        print(f"[{datetime.now()}] (Обработчик) Бронь #{booking_id} отменена админом {call.from_user.id}")
     except Exception as e:
-        print(f"[{datetime.now()}] (Поток) Ошибка при отмене брони админом {call.from_user.id} брони #{booking_id}: {e}")
+        print(f"[{datetime.now()}] (Обработчик) Ошибка при отмене брони админом {call.from_user.id} брони #{booking_id}: {e}")
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
 
 @bot.message_handler(content_types=['web_app_data'])
 def on_webapp_data(message: types.Message):
-    print(f"[{datetime.now()}] (Поток) ПРИШЛИ ДАННЫЕ ОТ WEBAPP: {message.web_app_data.data}") 
+    print(f"[{datetime.now()}] (Обработчик) ПРИШЛИ ДАННЫЕ ОТ WEBAPP: {message.web_app_data.data}") 
     try:
         data = json.loads(message.web_app_data.data)
         user_id = message.from_user.id
@@ -508,10 +510,10 @@ def on_webapp_data(message: types.Message):
                 bot.send_message(ADMIN_ID, admin_message_text, parse_mode="HTML")
 
     except json.JSONDecodeError as e:
-        print(f"[{datetime.now()}] (Поток) Ошибка парсинга JSON из WebApp: {e}")
+        print(f"[{datetime.now()}] (Обработчик) Ошибка парсинга JSON из WebApp: {e}")
         bot.send_message(message.from_user.id, "Ошибка в данных от WebApp. Попробуйте снова.")
     except Exception as e:
-        print(f"[{datetime.now()}] (Поток) Ошибка обработки WebApp данных: {e}")
+        print(f"[{datetime.now()}] (Обработчик) Ошибка обработки WebApp данных: {e}")
         bot.send_message(message.from_user.id, "Произошла ошибка при бронировании. Пожалуйста, попробуйте позже.")
 
 # =========================
@@ -668,18 +670,6 @@ def set_webhook_manual():
         print(f"[{datetime.now()}] Ошибка при установке Webhook вручную: {e}") 
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# Функция для обработки обновления в отдельном потоке
-def process_update_in_thread(upd):
-    # upd.update_id уже залогирован
-    print(f"[{datetime.now()}] (Поток): Начало обработки обновления update_id={upd.update_id}")
-    try:
-        # Здесь будет вызвана функция cmd_start
-        bot.process_new_updates([upd])
-        print(f"[{datetime.now()}] (Поток): Завершение обработки обновления update_id={upd.update_id}")
-    except Exception as e:
-        # Логирование критической ошибки, если process_new_updates терпит крах
-        print(f"[{datetime.now()}] (Поток): ОШИБКА при обработке обновления update_id={upd.update_id}: {e}")
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
     print(f"[{datetime.now()}] Получен POST запрос на /webhook") 
@@ -690,12 +680,16 @@ def webhook():
             update = types.Update.de_json(json_string)
             print(f"[{datetime.now()}] Webhook: Успешно десериализовано обновление.") 
             
-            threading.Thread(target=process_update_in_thread, args=(update,)).start() 
+            # НОВОЕ: СИНХРОННАЯ ОБРАБОТКА (самый надежный способ для pyTelegramBotAPI + Flask/Gunicorn)
+            # Если gunicorn настроен на несколько worker'ов, они сами обрабатывают параллелизм
+            bot.process_new_updates([update])
             
-            print(f"[{datetime.now()}] Webhook: Возвращен 200 OK. Обработка передана в поток.") 
+            # УСПЕШНО:
+            print(f"[{datetime.now()}] Webhook: Возвращен 200 OK после синхронной обработки.") 
             return "OK", 200
         except Exception as e:
-            print(f"[{datetime.now()}] Webhook: ОШИБКА десериализации обновления: {e}") 
+            # Логирование критической ошибки, если process_new_updates терпит крах
+            print(f"[{datetime.now()}] Webhook: ОШИБКА обработки обновления: {e}") 
             return "Error processing update", 500 
     else:
         print(f"[{datetime.now()}] Webhook: Неверный тип контента.") 

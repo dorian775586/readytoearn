@@ -152,8 +152,8 @@ def cmd_start(message: types.Message):
     user_name = message.from_user.full_name or "Неизвестный"
     bot.send_photo(
         message.chat.id,
-        photo="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQbh6M8aJwxylo8aI1B-ceUHaiOyEnA425a0A&s",
-        caption="<b>Рестобар «Белый Лис»</b> приветствует вас!\nТут вы можете дистанционно забронировать любой понравившийся столик!",
+        photo="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSQEWj37bVRbDfps6Ltix6_DffSVFOFXNzNlg&s", # ИЗМЕНЕНА ССЫЛКА НА КАРТИНКУ
+        caption="<b>Ресторан «Мама Хуана»</b> приветствует вас!\nТут вы можете дистанционно забронировать любой понравившийся столик!", # ИЗМЕНЕНО НАЗВАНИЕ
         reply_markup=main_reply_kb(user_id, user_name),
         parse_mode="HTML"
     )
@@ -534,5 +534,5 @@ if __name__ == "__main__":
     except Exception as e:
         print("Ошибка установки webhook:", e)
     
-    # app.run(host="0.0.0.0", port=port) # Эту строку теперь используем
-    app.run(host="0.0.0.0", port=port) 
+    # app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port)

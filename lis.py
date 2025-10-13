@@ -1,12 +1,13 @@
 import os
 import logging
-from datetime import datetime, timedelta, date # Добавлена 'date' для полной совместимости
+import requests # Удалим позже, если не нужен
+from datetime import datetime, timedelta, date, timezone # Добавлена 'date' и 'timezone'
 from flask import Flask, request, jsonify
 from telebot import TeleBot, types
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from flask_cors import CORS
-from dateutil import tz # Используем для более безопасного определения часовых поясов
+from dateutil import tz 
 
 # =========================
 # НАСТРОЙКА И КОНСТАНТЫ
@@ -463,7 +464,7 @@ def get_booked_times():
 
 @app.route("/book", methods=["POST"])
 def book_api():
-    """Обрабатывает POST-запрос на бронирование."""
+    """Обрабатывает POST-запрос на бронирование, отправляет подтверждение пользователю и уведомление админу."""
     try:
         data = request.json
         user_id = data.get('user_id')
@@ -481,12 +482,13 @@ def book_api():
         booking_datetime_str = f"{date_str} {time_slot}"
         try:
             # Парсим как UTC время
-            booking_for = datetime.strptime(booking_datetime_str, "%Y-%m-%d %H:%M").replace(tzinfo=tz.tzutc())
+            # Используем встроенный timezone.utc для совместимости с postgres
+            booking_for = datetime.strptime(booking_datetime_str, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
         except ValueError:
             return jsonify({"status": "error", "message": "Неверный формат даты или времени."}), 400
 
         # Проверка на прошедшее время
-        if booking_for < datetime.utcnow().replace(tzinfo=tz.tzutc()):
+        if booking_for < datetime.now(timezone.utc):
             return jsonify({"status": "error", "message": "Нельзя забронировать прошедшее время."}), 400
         
         with db_connect() as conn:
@@ -509,12 +511,26 @@ def book_api():
                 new_booking_id = cur.fetchone()['booking_id']
                 conn.commit()
 
-        # Уведомление администратора о новой брони
+        # 1. Отправляем пользователю подтверждение
+        booking_date_formatted = booking_for.strftime("%d.%m.%Y")
+        try:
+            user_msg = (
+                f"✅ <b>Ваша бронь подтверждена!</b>\n\n"
+                f"Стол: <b>{table_id}</b>\n"
+                f"Дата: {booking_date_formatted}\n"
+                f"Время: {time_slot}\n"
+                f"Гостей: {guests}\n"
+                f"Телефон: {phone}"
+            )
+            bot.send_message(user_id, user_msg, parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"Не удалось отправить подтверждение пользователю {user_id}: {e}")
+
+        # 2. Уведомление администратора о новой брони
         if ADMIN_ID:
-            booking_date_formatted = booking_for.strftime("%d.%m.%Y")
             user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>'
-            message_text = (
-                f"✅ <b>НОВАЯ БРОНЬ: #{new_booking_id}</b>\n"
+            admin_msg = (
+                f"📩 <b>НОВАЯ БРОНЬ: #{new_booking_id}</b>\n"
                 f"Пользователь: {user_link}\n"
                 f"Стол: <b>{table_id}</b>\n"
                 f"Дата/Время: <b>{booking_date_formatted} в {time_slot}</b>\n"
@@ -522,7 +538,7 @@ def book_api():
                 f"Телефон: {phone}"
             )
             try:
-                bot.send_message(ADMIN_ID, message_text, parse_mode="HTML")
+                bot.send_message(ADMIN_ID, admin_msg, parse_mode="HTML")
             except Exception as e:
                 logger.error(f"Не удалось уведомить админа о новой брони: {e}")
 

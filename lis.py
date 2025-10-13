@@ -83,6 +83,7 @@ MENU_PHOTOS = {
     "🥩 Премиум Стейки": ["https://raw.githubusercontent.com/dorian775586/gitrepo/main/public/images/menu9.jpg"],
     "☕ Десерты & Напитки": ["https://raw.githubusercontent.com/dorian775586/gitrepo/main/public/images/menu10.jpg"],
 }
+
 # =========================
 # DB INIT
 # =========================
@@ -361,37 +362,38 @@ def on_history_btn(message: types.Message):
 # =========================
 # CALLBACKS
 # =========================
-
 @bot.callback_query_handler(func=lambda c: c.data.startswith("menu_cat_"))
 def on_menu_category_select(call: types.CallbackQuery):
     """Обработка выбора категории меню."""
     print(f"[{datetime.now()}] (Обработчик) Получен callback от кнопки меню '{call.data}' от user_id: {call.from_user.id}")
     category_name = call.data.split("menu_cat_")[1]
-    
+
     kb = types.InlineKeyboardMarkup(row_width=2)
     buttons = [types.InlineKeyboardButton(name, callback_data=f"menu_cat_{name}") for name in MENU_CATEGORIES]
     kb.add(*buttons)
-    
+
     try:
+        photos = MENU_PHOTOS.get(category_name, [])
+        if photos:
+            for url in photos:
+                bot.send_photo(call.message.chat.id, url)
+        else:
+            bot.send_message(call.message.chat.id, f"Раздел <b>{category_name}</b> пока пуст.", parse_mode="HTML")
+
         bot.send_message(
-            call.message.chat.id, 
-            f"Раздел: <b>{category_name}</b>\n\nЗдесь должно быть описание или список блюд.", 
-            parse_mode="HTML"
-        )
-        
-        bot.send_message(
-            call.message.chat.id, 
+            call.message.chat.id,
             "⬇️ Выберите следующий раздел:",
             reply_markup=kb
         )
 
         bot.answer_callback_query(call.id, text=f"Открываю: {category_name}")
         print(f"[{datetime.now()}] (Обработчик) Отправлено текстовое меню для категории '{category_name}' user_id: {call.from_user.id}")
-        
+
     except Exception as e:
         logging.error(f"[{datetime.now()}] (Обработчик) Ошибка при отправке текстового меню для user_id: {call.from_user.id}: {e}")
         bot.send_message(call.message.chat.id, f"Произошла ошибка при загрузке раздела <b>{category_name}</b>.", parse_mode="HTML")
         bot.answer_callback_query(call.id, text="Ошибка загрузки.", show_alert=True)
+
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("cancel_"))
 def on_cancel_user(call: types.CallbackQuery):

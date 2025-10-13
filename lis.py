@@ -491,7 +491,8 @@ def index():
 # =========================
 # TELEGRAM WEBHOOK / SERVER START
 # =========================
-@app.route("/" + BOT_TOKEN, methods=['POST'])
+# ИЗМЕНЕНИЕ: Теперь вебхук ожидает POST-запрос на /webhook
+@app.route("/webhook", methods=['POST'])
 def get_message():
     """Обработка вебхука Telegram."""
     json_string = request.get_data().decode('utf-8')
@@ -505,7 +506,8 @@ if __name__ == '__main__':
     if RENDER_EXTERNAL_URL:
         # Установка вебхука при старте
         bot.remove_webhook()
-        bot.set_webhook(url=RENDER_EXTERNAL_URL + "/" + BOT_TOKEN)
-        print(f"Вебхук установлен на: {RENDER_EXTERNAL_URL}/{BOT_TOKEN}")
+        # ИЗМЕНЕНИЕ: Устанавливаем вебхук на /webhook
+        bot.set_webhook(url=RENDER_EXTERNAL_URL + "/webhook")
+        print(f"Вебхук установлен на: {RENDER_EXTERNAL_URL}/webhook")
     
     app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))

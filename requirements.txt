@@ -1,6 +1,7 @@
-pyTelegramBotAPI==4.16.0
 Flask
+pyTelegramBotAPI
 psycopg2-binary
 Flask-Cors
+python-dateutil
 gunicorn
 python-dotenv==1.1.1

@@ -373,13 +373,12 @@ def on_menu_category_select(call: types.CallbackQuery):
     kb.add(*buttons)
     
     try:
-        photos = MENU_PHOTOS.get(category_name, [])
-if photos:
-    for url in photos:
-        bot.send_photo(call.message.chat.id, url)
-else:
-    bot.send_message(call.message.chat.id, f"Раздел <b>{category_name}</b> пока пуст.", parse_mode="HTML")
-
+    photos = MENU_PHOTOS.get(category_name, [])
+    if photos:
+        for url in photos:
+            bot.send_photo(call.message.chat.id, url)
+    else:
+        bot.send_message(call.message.chat.id, f"Раздел <b>{category_name}</b> пока пуст.", parse_mode="HTML")
         
         bot.send_message(
             call.message.chat.id, 

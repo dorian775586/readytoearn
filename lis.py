@@ -67,6 +67,21 @@ MENU_CATEGORIES = [
     "🥩 Премиум Стейки",
     "☕ Десерты & Напитки",
 ]
+# =========================
+# МЕНЮ: ссылки на фото
+# =========================
+MENU_PHOTOS = {
+    "🥣 Закуски (Холодные)": ["https://github.com/dorian775586/gitrepo/blob/main/public/images/menu1.jpg"],
+    "🌶️ Закуски (Горячие/Супы)": ["https://github.com/dorian775586/gitrepo/blob/main/public/images/menu2.jpg"],
+    "🥗 Салаты": ["https://github.com/dorian775586/gitrepo/blob/main/public/images/menu3.jpg"],
+    "🍔 Бургеры": ["https://github.com/dorian775586/gitrepo/blob/main/public/images/menu4.jpg"],
+    "🌯 Сэндвичи & Роллы": ["https://github.com/dorian775586/gitrepo/blob/main/public/images/menu5.jpg"],
+    "🍖 Основное (Говядина)": ["https://github.com/dorian775586/gitrepo/blob/main/public/images/menu6.jpg"],
+    "🐟 Основное (Рыба/Свинина)": ["https://github.com/dorian775586/gitrepo/blob/main/public/images/menu7.jpg"],
+    "🍗 Основное (Курица/Утка)": ["https://github.com/dorian775586/gitrepo/blob/main/public/images/menu8.jpg"],
+    "🥩 Премиум Стейки": ["https://github.com/dorian775586/gitrepo/blob/main/public/images/menu9.jpg"],
+    "☕ Десерты & Напитки": ["https://github.com/dorian775586/gitrepo/blob/main/public/images/menu10.jpg"],
+}
 
 # =========================
 # DB INIT
@@ -358,11 +373,13 @@ def on_menu_category_select(call: types.CallbackQuery):
     kb.add(*buttons)
     
     try:
-        bot.send_message(
-            call.message.chat.id, 
-            f"Раздел: <b>{category_name}</b>\n\nЗдесь должно быть описание или список блюд.", 
-            parse_mode="HTML"
-        )
+        photos = MENU_PHOTOS.get(category_name, [])
+if photos:
+    for url in photos:
+        bot.send_photo(call.message.chat.id, url)
+else:
+    bot.send_message(call.message.chat.id, f"Раздел <b>{category_name}</b> пока пуст.", parse_mode="HTML")
+
         
         bot.send_message(
             call.message.chat.id, 

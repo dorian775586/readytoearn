@@ -69,6 +69,21 @@ MENU_CATEGORIES = [
 ]
 
 # =========================
+# МЕНЮ: ссылки на фото
+# =========================
+MENU_PHOTOS = {
+    "🥣 Закуски (Холодные)": ["https://raw.githubusercontent.com/dorian775586/gitrepo/main/public/images/menu1.jpg"],
+    "🌶️ Закуски (Горячие/Супы)": ["https://raw.githubusercontent.com/dorian775586/gitrepo/main/public/images/menu2.jpg"],
+    "🥗 Салаты": ["https://raw.githubusercontent.com/dorian775586/gitrepo/main/public/images/menu3.jpg"],
+    "🍔 Бургеры": ["https://raw.githubusercontent.com/dorian775586/gitrepo/main/public/images/menu4.jpg"],
+    "🌯 Сэндвичи & Роллы": ["https://raw.githubusercontent.com/dorian775586/gitrepo/main/public/images/menu5.jpg"],
+    "🍖 Основное (Говядина)": ["https://raw.githubusercontent.com/dorian775586/gitrepo/main/public/images/menu6.jpg"],
+    "🐟 Основное (Рыба/Свинина)": ["https://raw.githubusercontent.com/dorian775586/gitrepo/main/public/images/menu7.jpg"],
+    "🍗 Основное (Курица/Утка)": ["https://raw.githubusercontent.com/dorian775586/gitrepo/main/public/images/menu8.jpg"],
+    "🥩 Премиум Стейки": ["https://raw.githubusercontent.com/dorian775586/gitrepo/main/public/images/menu9.jpg"],
+    "☕ Десерты & Напитки": ["https://raw.githubusercontent.com/dorian775586/gitrepo/main/public/images/menu10.jpg"],
+}
+# =========================
 # DB INIT
 # =========================
 def db_connect():

@@ -373,8 +373,8 @@ def on_menu_category_select(call: types.CallbackQuery):
     kb.add(*buttons)
     
     try:
-    photos = MENU_PHOTOS.get(category_name, [])
-    if photos:
+     photos = MENU_PHOTOS.get(category_name, [])
+     if photos:
         for url in photos:
             bot.send_photo(call.message.chat.id, url)
     else:

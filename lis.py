@@ -240,7 +240,7 @@ def on_my_booking(message: types.Message):
     print(f"[{datetime.now()}] (Обработчик) Нажата кнопка 'Моя бронь' от user_id: {message.from_user.id}")
     try:
         # Устанавливаем часовой пояс для сравнения с NOW()
-        local_tz = tz.gettz()
+        local_tz = tz.gettz("Europe/Moscow")
         now_local = datetime.now(tz=local_tz)
 
         with db_connect() as conn:
@@ -338,7 +338,7 @@ def on_admin_panel(message: types.Message):
         
         for r in rows:
             # Устанавливаем часовой пояс для отображения
-            local_tz = tz.gettz()
+            local_tz = tz.gettz("Europe/Moscow")
             booking_for_dt = r['booking_for'].astimezone(local_tz) if r['booking_for'].tzinfo else r['booking_for']
             booking_date = booking_for_dt.strftime("%d.%m.%Y")
             
@@ -425,7 +425,7 @@ def on_cancel_user(call: types.CallbackQuery):
             
             if ADMIN_ID and booking_info:
                 try:
-                    local_tz = tz.gettz()
+                    local_tz = tz.gettz("Europe/Moscow")
                     booking_for_dt = booking_info['booking_for'].astimezone(local_tz) if booking_info['booking_for'].tzinfo else booking_info['booking_for']
                     booking_date = booking_for_dt.strftime("%d.%m.%Y")
                     user_id = booking_info['user_id']
@@ -479,7 +479,7 @@ def on_cancel_admin(call: types.CallbackQuery):
         
         if booking_info:
             user_id = booking_info['user_id']
-            local_tz = tz.gettz()
+            local_tz = tz.gettz("Europe/Moscow")
             booking_for_dt = booking_info['booking_for'].astimezone(local_tz) if booking_info['booking_for'].tzinfo else booking_info['booking_for']
             booking_date = booking_for_dt.strftime("%d.%m.%Y")
             
@@ -519,7 +519,7 @@ def on_webapp_data(message: types.Message):
         # Создаем datetime с часовым поясом, чтобы Postgres корректно обработал сравнение с NOW()
         booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
         # Присваиваем локальный часовой пояс, чтобы при сохранении в TZ-aware DB он корректно перевелся в UTC
-        local_tz = tz.gettz()
+        local_tz = tz.gettz("Europe/Moscow")
         booking_datetime = booking_datetime_naive.replace(tzinfo=local_tz)
 
 
@@ -593,7 +593,7 @@ def book_api():
 
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
-        local_tz = tz.gettz()
+        local_tz = tz.gettz("Europe/Moscow")
         booking_datetime = booking_datetime_naive.replace(tzinfo=local_tz)
 
 
@@ -681,7 +681,7 @@ def get_booked_times():
                 booked_times = [row['time_slot'] for row in cursor.fetchall()]
         
         # Часовые пояса
-        local_tz = tz.gettz()
+        local_tz = tz.gettz("Europe/Moscow")
         
         # Время работы ресторана
         start_time_naive = datetime.combine(query_date, datetime.strptime("12:00", "%H:%M").time())

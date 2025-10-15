@@ -699,9 +699,9 @@ def get_booked_times():
             slot_str = current_time.strftime("%H:%M")
             
            # Пропускаем прошедшие слоты только если пользователь выбрал сегодняшнюю дату
-if query_date == now_local.date() and current_time < now_local + timedelta(minutes=30):
-    current_time += timedelta(minutes=30)
-    continue 
+        if query_date == now_local.date() and current_time < now_local + timedelta(minutes=30):
+             current_time += timedelta(minutes=30)
+        continue 
 
             
             if slot_str not in booked_times:

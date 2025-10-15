@@ -698,10 +698,11 @@ def get_booked_times():
         while current_time <= end_time:
             slot_str = current_time.strftime("%H:%M")
             
-            # Проверка, если слот уже прошел СЕГОДНЯ
-            if current_time < now_local + timedelta(minutes=30): # Добавляем буфер в 60 минут
-                current_time += timedelta(minutes=30)
-                continue 
+           # Пропускаем прошедшие слоты только если пользователь выбрал сегодняшнюю дату
+if query_date == now_local.date() and current_time < now_local + timedelta(minutes=30):
+    current_time += timedelta(minutes=30)
+    continue 
+
             
             if slot_str not in booked_times:
                 all_slots.append(slot_str)

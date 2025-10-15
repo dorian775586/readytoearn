@@ -520,7 +520,7 @@ def on_webapp_data(message: types.Message):
         booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
         # Присваиваем локальный часовой пояс, чтобы при сохранении в TZ-aware DB он корректно перевелся в UTC
         local_tz = tz.gettz("Europe/Moscow")
-        booking_datetime = booking_datetime_naive.astimezone(local_tz)
+        booking_datetime = booking_datetime_naive.replace(tzinfo=local_tz)
 
 
         with db_connect() as conn:
@@ -594,7 +594,7 @@ def book_api():
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
         local_tz = tz.gettz("Europe/Moscow")
-        booking_datetime = booking_datetime_naive.astimezone(local_tz)
+        booking_datetime = booking_datetime_naive.replace(tzinfo=local_tz)
 
 
 

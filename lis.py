@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 from datetime import datetime, timedelta, date, timezone
 import requests 
@@ -150,12 +151,15 @@ def init_db():
 # BOT & APP
 # =========================
 # КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: threaded=False, чтобы избежать конфликтов с Flask/Gunicorn и Webhook.
-bot = TeleBot(BOT_TOKEN, parse_mode="HTML", threaded=False) 
+bot = TeleBot(BOT_TOKEN, parse_mode="HTML", threaded=False)
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": ["https://gitrepo-drab.vercel.app"]}}, supports_credentials=True)
 
-with app.app_context(): 
-    init_db()
+if __name__ == "__main__":
+    with app.app_context():
+        init_db()
+    app.run(host="0.0.0.0", port=5000)
+
 
 # =========================
 # HELPERS (UI)
@@ -515,6 +519,22 @@ def on_webapp_data(message: types.Message):
             bot.send_message(user_id, "Ошибка: Не хватает данных для бронирования через WebApp.")
             return
 
+# ===== ВАЛИДАЦИЯ ДАННЫХ =====
+phone_pattern = r'^\+?\d{10,15}$'
+if not re.match(phone_pattern, phone):
+    bot.send_message(user_id, "❌ Ошибка: Неверный формат телефона. Укажите в формате +79991234567.")
+    return
+
+try:
+    guests = int(guests)
+    if guests < 1 or guests > 20:
+        bot.send_message(user_id, "❌ Ошибка: Количество гостей должно быть от 1 до 20.")
+        return
+except ValueError:
+    bot.send_message(user_id, "❌ Ошибка: Некорректное значение количества гостей.")
+    return
+# =============================
+
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         # Создаем datetime с часовым поясом, чтобы Postgres корректно обработал сравнение с NOW()
         booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
@@ -590,6 +610,19 @@ def book_api():
         if not all([phone, guests, table_id, time_slot, date_str]):
             print(f"[{datetime.now()}] Ошибка: Не хватает данных для бронирования.")
             return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
+
+# ===== ВАЛИДАЦИЯ ДАННЫХ =====
+phone_pattern = r'^\+?\d{10,15}$'
+if not re.match(phone_pattern, phone):
+    return {"status": "error", "message": "Неверный формат телефона. Укажите в формате +79991234567."}, 400
+
+try:
+    guests = int(guests)
+    if guests < 1 or guests > 20:
+        return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
+except ValueError:
+    return {"status": "error", "message": "Некорректное значение количества гостей."}, 400
+# =============================
 
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())

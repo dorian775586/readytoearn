@@ -520,7 +520,7 @@ def on_webapp_data(message: types.Message):
         booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
         # Присваиваем локальный часовой пояс, чтобы при сохранении в TZ-aware DB он корректно перевелся в UTC
         local_tz = tz.gettz("Europe/Moscow")
-        booking_datetime = booking_datetime_naive.replace(tzinfo=local_tz)
+        booking_datetime = booking_datetime_naive.astimezone(local_tz)
 
 
         with db_connect() as conn:
@@ -594,7 +594,7 @@ def book_api():
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
         local_tz = tz.gettz("Europe/Moscow")
-        booking_datetime = booking_datetime_naive.replace(tzinfo=local_tz)
+        booking_datetime = booking_datetime_naive.astimezone(local_tz)
 
 
 
@@ -698,11 +698,10 @@ def get_booked_times():
         while current_time <= end_time:
             slot_str = current_time.strftime("%H:%M")
             
-           # Пропускаем прошедшие слоты только если пользователь выбрал сегодняшнюю дату
-            if query_date == now_local.date() and current_time < now_local + timedelta(minutes=30):
+            # Проверка, если слот уже прошел СЕГОДНЯ
+            if current_time < now_local + timedelta(minutes=30): # Добавляем буфер в 60 минут
                 current_time += timedelta(minutes=30)
                 continue 
-
             
             if slot_str not in booked_times:
                 all_slots.append(slot_str)

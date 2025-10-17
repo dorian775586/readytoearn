@@ -610,18 +610,19 @@ def book_api():
             print(f"[{datetime.now()}] Ошибка: Не хватает данных для бронирования.")
             return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
 
-# ===== ВАЛИДАЦИЯ ДАННЫХ =====
-phone_pattern = r'^\+?\d{10,15}$'
-if not re.match(phone_pattern, phone):
-    return {"status": "error", "message": "Неверный формат телефона. Укажите в формате +79991234567."}, 400
+ # ===== ВАЛИДАЦИЯ ДАННЫХ =====
+        phone_pattern = r'^\+?\d{10,15}$'
+        if not re.match(phone_pattern, phone):
+            return {"status": "error", "message": "Неверный формат телефона. Укажите в формате +79991234567."}, 400
 
-try:
-    guests = int(guests)
-    if guests < 1 or guests > 20:
-        return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
-except ValueError:
-    return {"status": "error", "message": "Некорректное значение количества гостей."}, 400
-# =============================
+        try:
+            guests = int(guests)
+            if guests < 1 or guests > 20:
+                return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
+        except ValueError:
+            return {"status": "error", "message": "Некорректное значение количества гостей."}, 400
+        # =============================
+
 
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())

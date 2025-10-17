@@ -521,11 +521,11 @@ def on_webapp_data(message: types.Message):
             return
 
         # ===== ВАЛИДАЦИЯ ДАННЫХ =====
-        phone_pattern = r'^\+?\d{10,15}$'
+        phone_pattern = r'^\+375(25|29|33|44)\d{7}$'
         if not re.match(phone_pattern, phone):
             # Внимание: Эта строка вернет ответ HTTP, что не подходит для обработчика Telegram.
             # Функциональность сохранена, но может вызвать ошибку.
-            return {"status": "error", "message": "Неверный формат телефона. Укажите в формате +79991234567."}, 400
+            return {"status": "error", "message": "Неверный формат телефона. Укажите в формате +375 (ХХ) ХХХХХХХ."}, 400
 
         try:
             guests = int(guests)
@@ -614,9 +614,9 @@ def book_api():
             return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
 
         # ===== ВАЛИДАЦИЯ ДАННЫХ =====
-        phone_pattern = r'^\+?\d{10,15}$'
+        phone_pattern = r'^\+375(25|29|33|44)\d{7}$'
         if not re.match(phone_pattern, phone):
-            return {"status": "error", "message": "Неверный формат телефона. Укажите в формате +79991234567."}, 400
+            return {"status": "error", "message": "Неверный формат телефона. Укажите в формате +375 (ХХ) ХХХХХХХ."}, 400
 
         try:
             guests = int(guests)

@@ -519,20 +519,19 @@ def on_webapp_data(message: types.Message):
             bot.send_message(user_id, "Ошибка: Не хватает данных для бронирования через WebApp.")
             return
 
-# ===== ВАЛИДАЦИЯ ДАННЫХ =====
-phone_pattern = r'^\+?\d{10,15}$'
-if not re.match(phone_pattern, phone):
-    bot.send_message(user_id, "❌ Ошибка: Неверный формат телефона. Укажите в формате +79991234567.")
-    return
+    # ===== ВАЛИДАЦИЯ ДАННЫХ =====
+    phone_pattern = r'^\+?\d{10,15}$'
+    if not re.match(phone_pattern, phone):
+        return {"status": "error", "message": "Неверный формат телефона. Укажите в формате +79991234567."}, 400
 
-try:
-    guests = int(guests)
-    if guests < 1 or guests > 20:
-        bot.send_message(user_id, "❌ Ошибка: Количество гостей должно быть от 1 до 20.")
-        return
-except ValueError:
-    bot.send_message(user_id, "❌ Ошибка: Некорректное значение количества гостей.")
-    return
+    try:
+        guests = int(guests)
+        if guests < 1 or guests > 20:
+            return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
+    except ValueError:
+        return {"status": "error", "message": "Некорректное значение количества гостей."}, 400
+    # =============================
+
 # =============================
 
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()

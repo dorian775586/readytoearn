@@ -519,14 +519,17 @@ def on_webapp_data(message: types.Message):
         if not all([phone, guests, table_id, time_slot, date_str]):
             bot.send_message(user_id, "Ошибка: Не хватает данных для бронирования через WebApp.")
             return
-# ===== ВАЛИДАЦИЯ ДАННЫХ ====
+
 # ===== ВАЛИДАЦИЯ ДАННЫХ ====
 try:
     guests = int(guests)
     if guests < 1 or guests > 20:
-        return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
+        bot.send_message(user_id, "Количество гостей должно быть от 1 до 20.")
+        return
 except ValueError:
-    return {"status": "error", "message": "Некорректное значение количества гостей."}, 400
+    bot.send_message(user_id, "Некорректное значение количества гостей.")
+    return
+
 # =============================
 
 booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
@@ -659,12 +662,12 @@ def book_api():
                 print(f"[{datetime.now()}] Не удалось отправить уведомление пользователю {user_id}: {e}")
 
             if ADMIN_ID:
-    try:
-        formatted_date = booking_date.strftime("%d.%m.%Y")
-        user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
-        warning_text = ""
-        if guests >= 10:
-            warning_text = "\n⚠️ <b>ВНИМАНИЕ:</b> количество гостей 10 или более! Согласуйте предварительный заказ!"
+                try:
+                    formatted_date = booking_date.strftime("%d.%m.%Y")
+                    user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
+                    warning_text = ""
+                if guests >= 10:
+                        warning_text = "\n⚠️ <b>ВНИМАНИЕ:</b> количество гостей 10 или более! Согласуйте предварительный заказ!"
 
         message_text = (
             f"Новая бронь:\n"

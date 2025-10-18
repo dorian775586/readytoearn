@@ -520,13 +520,7 @@ def on_webapp_data(message: types.Message):
             bot.send_message(user_id, "Ошибка: Не хватает данных для бронирования через WebApp.")
             return
 
-        # ===== ВАЛИДАЦИЯ ДАННЫХ =====
-        phone_pattern = r'^\+375(25|29|33|44)\d{7}$'
-        if not re.match(phone_pattern, phone):
-            # Внимание: Эта строка вернет ответ HTTP, что не подходит для обработчика Telegram.
-            # Функциональность сохранена, но может вызвать ошибку.
-            return {"status": "error", "message": "Неверный формат телефона. Укажите в формате +375 (ХХ) ХХХХХХХ."}, 400
-
+        # ===== ВАЛИДАЦИЯ ДАННЫХ ====
         try:
             guests = int(guests)
             if guests < 1 or guests > 20:
@@ -573,17 +567,10 @@ def on_webapp_data(message: types.Message):
             bot.send_message(user_id, message_text)
 
             if ADMIN_ID:
-                user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
-                admin_message_text = (
-                    f"Новая бронь:\n"
-                    f"Пользователь: {user_link}\n"
-                    f"Стол: {table_id}\n"
-                    f"Дата: {formatted_date}\n"
-                    f"Время: {time_slot}\n"
-                    f"Гостей: {guests}\n"
-                    f"Телефон: {phone}"
-                )
-                bot.send_message(ADMIN_ID, admin_message_text, parse_mode="HTML")
+        except Exception as e:
+            print(f"Ошибка при отправке уведомления пользователю: {e}")
+
+
 
     except json.JSONDecodeError as e:
         print(f"[{datetime.now()}] (Обработчик) Ошибка парсинга JSON из WebApp: {e}")
@@ -614,10 +601,7 @@ def book_api():
             return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
 
         # ===== ВАЛИДАЦИЯ ДАННЫХ =====
-        phone_pattern = r'^\+375(25|29|33|44)\d{7}$'
-        if not re.match(phone_pattern, phone):
-            return {"status": "error", "message": "Неверный формат телефона. Укажите в формате +375 (ХХ) ХХХХХХХ."}, 400
-
+        
         try:
             guests = int(guests)
             if guests < 1 or guests > 20:
@@ -662,19 +646,36 @@ def book_api():
                 print(f"[{datetime.now()}] Не удалось отправить уведомление пользователю {user_id}: {e}")
 
             if ADMIN_ID:
-                try:
-                    formatted_date = booking_date.strftime("%d.%m.%Y")
-                    user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
-                    message_text = (
-                        f"Новая бронь:\n"
-                        f"Пользователь: {user_link}\n"
-                        f"Стол: {table_id}\n"
-                        f"Дата: {formatted_date}\n"
-                        f"Время: {time_slot}\n"
-                        f"Гостей: {guests}\n"
-                        f"Телефон: {phone}"
-                    )
-                    bot.send_message(ADMIN_ID, message_text, parse_mode="HTML")
+    try:
+        formatted_date = booking_date.strftime("%d.%m.%Y")
+        user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
+        warning_text = ""
+        if guests >= 10:
+            warning_text = "\n⚠️ <b>ВНИМАНИЕ:</b> количество гостей 10 или более! Согласуйте предварительный заказ!"
+
+        message_text = (
+            f"Новая бронь:\n"
+            f"Пользователь: {user_link}\n"
+            f"Стол: {table_id}\n"
+            f"Дата: {formatted_date}\n"
+            f"Время: {time_slot}\n"
+            f"Гостей: {guests}\n"
+            f"Телефон: {phone}"
+            f"{warning_text}"
+        )
+        bot.send_message(ADMIN_ID, message_text, parse_mode="HTML")
+                # Если гостей 10 или больше — уведомляем пользователя
+        if guests >= 10 and user_id:
+            try:
+                bot.send_message(
+                    user_id,
+                    "⚠️ При бронировании столика на 10 и более гостей необходимо согласовать предварительный заказ.\n"
+                    "Администратор свяжется с Вами в ближайшее время!"
+                )
+            except Exception as e:
+                print(f"Ошибка при отправке уведомления пользователю: {e}")
+
+
                     print(f"[{datetime.now()}] Уведомление админу о новой брони отправлено.")
                 except Exception as e:
                     print(f"[{datetime.now()}] Не удалось отправить сообщение админу: {e}")

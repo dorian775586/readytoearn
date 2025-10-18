@@ -519,67 +519,79 @@ def on_webapp_data(message: types.Message):
         if not all([phone, guests, table_id, time_slot, date_str]):
             bot.send_message(user_id, "Ошибка: Не хватает данных для бронирования через WebApp.")
             return
+# ===== ВАЛИДАЦИЯ ДАННЫХ ====
+try:
+    guests = int(guests)
+    if guests < 1 or guests > 20:
+        return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
+except ValueError:
+    return {"status": "error", "message": "Некорректное значение количества гостей."}, 400
+# =============================
 
-        # ===== ВАЛИДАЦИЯ ДАННЫХ ====
-        try:
-            guests = int(guests)
-            if guests < 1 or guests > 20:
-                # Внимание: Эта строка вернет ответ HTTP, что не подходит для обработчика Telegram.
-                return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
-        except ValueError:
-            # Внимание: Эта строка вернет ответ HTTP, что не подходит для обработчика Telegram.
-            return {"status": "error", "message": "Некорректное значение количества гостей."}, 400
-        # =============================
-        # =============================
+booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
+local_tz = tz.gettz("Europe/Moscow")
+booking_datetime = booking_datetime_naive.astimezone(local_tz)
 
-        booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-        # Создаем datetime с часовым поясом, чтобы Postgres корректно обработал сравнение с NOW()
-        booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
-        # Присваиваем локальный часовой пояс, чтобы при сохранении в TZ-aware DB он корректно перевелся в UTC
-        local_tz = tz.gettz("Europe/Moscow")
-        booking_datetime = booking_datetime_naive.astimezone(local_tz)
+with db_connect() as conn:
+    with conn.cursor() as cursor:
+        # Проверка на конфликт: стол, дата и время должны быть уникальными
+        cursor.execute(
+            "SELECT 1 FROM bookings WHERE table_id = %s AND booking_for::date = %s AND time_slot = %s;",
+            (table_id, booking_date, time_slot)
+        )
+        existing_booking = cursor.fetchone()
+        if existing_booking:
+            bot.send_message(user_id, f"Стол {table_id} уже забронирован на {date_str} {time_slot}. Пожалуйста, выберите другое время.")
+            return
 
-        with db_connect() as conn:
-            with conn.cursor() as cursor:
-                # Проверка на конфликт: стол, дата и время должны быть уникальными
-                cursor.execute(
-                    "SELECT 1 FROM bookings WHERE table_id = %s AND booking_for::date = %s AND time_slot = %s;",
-                    (table_id, booking_date, time_slot)
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+            """,
+            (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(tz=local_tz), booking_datetime)
+        )
+        conn.commit()
+
+formatted_date = booking_date.strftime("%d.%m.%Y")
+message_text = f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}"
+bot.send_message(user_id, message_text)
+
+if ADMIN_ID:
+    try:
+        user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
+        warning_text = ""
+        if guests >= 10:
+            warning_text = "\n⚠️ <b>ВНИМАНИЕ:</b> количество гостей 10 или более! Согласуйте предварительный заказ!"
+
+        admin_message_text = (
+            f"Новая бронь:\n"
+            f"Пользователь: {user_link}\n"
+            f"Стол: {table_id}\n"
+            f"Дата: {formatted_date}\n"
+            f"Время: {time_slot}\n"
+            f"Гостей: {guests}\n"
+            f"Телефон: {phone}"
+            f"{warning_text}"
+        )
+        bot.send_message(ADMIN_ID, admin_message_text, parse_mode="HTML")
+
+        if guests >= 10 and user_id:
+            try:
+                bot.send_message(
+                    user_id,
+                    "⚠️ При бронировании столика на 10 и более гостей необходимо согласовать предварительный заказ.\n"
+                    "Администратор свяжется с Вами в ближайшее время!"
                 )
-                existing_booking = cursor.fetchone()
-                if existing_booking:
-                    bot.send_message(user_id, f"Стол {table_id} уже забронирован на {date_str} {time_slot}. Пожалуйста, выберите другое время.")
-                    return
+            except Exception as e:
+                print(f"Ошибка при отправке уведомления пользователю: {e}")
 
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
-                    """,
-                    # Важно: booking_datetime теперь содержит информацию о часовом поясе
-                    (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(tz=local_tz), booking_datetime)
-                )
-                conn.commit()
-
-            formatted_date = booking_date.strftime("%d.%m.%Y")
-            message_text = f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}"
-            bot.send_message(user_id, message_text)
-
-            if ADMIN_ID:
-        except Exception as e:
-            print(f"Ошибка при отправке уведомления пользователю: {e}")
-
-
-
-    except json.JSONDecodeError as e:
-        print(f"[{datetime.now()}] (Обработчик) Ошибка парсинга JSON из WebApp: {e}")
-        bot.send_message(message.from_user.id, "Ошибка в данных от WebApp. Попробуйте снова.")
+        print(f"[{datetime.now()}] Уведомление админу о новой брони отправлено.")
     except Exception as e:
-        print(f"[{datetime.now()}] (Обработчик) Ошибка обработки WebApp данных: {e}")
-        bot.send_message(message.from_user.id, "Произошла ошибка при бронировании. Пожалуйста, попробуйте позже.")
+        print(f"Ошибка при отправке уведомления админу: {e}")
 
-# =========================
 # BOOKING API
 # =========================
 @app.route("/book", methods=["POST"])

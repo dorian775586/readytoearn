@@ -520,6 +520,7 @@ def on_webapp_data(message: types.Message):
             bot.send_message(user_id, "Ошибка: Не хватает данных для бронирования через WebApp.")
             return
 # ===== ВАЛИДАЦИЯ ДАННЫХ ====
+# ===== ВАЛИДАЦИЯ ДАННЫХ ====
 try:
     guests = int(guests)
     if guests < 1 or guests > 20:

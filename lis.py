@@ -464,6 +464,7 @@ def on_cancel_user(call: types.CallbackQuery):
 def on_webapp_data(message: types.Message):
     """Обработка данных, пришедших из WebApp."""
     print(f"[{datetime.now()}] (Обработчик) ПРИШЛИ ДАННЫЕ ОТ WEBAPP: {message.web_app_data.data}") 
+
     try:
         data = json.loads(message.web_app_data.data)
         user_id = message.from_user.id
@@ -478,7 +479,7 @@ def on_webapp_data(message: types.Message):
             bot.send_message(user_id, "Ошибка: Не хватает данных для бронирования через WebApp.")
             return
 
-        # ===== ВАЛИДАЦИЯ ДАННЫХ =====
+        # ===== ВАЛИДАЦИЯ =====
         phone_pattern = r'^\+375(25|29|33|44)\d{7}$'
         if not re.match(phone_pattern, phone):
             bot.send_message(user_id, "Неверный формат телефона. Укажите в формате +375XXXXXXXXX.")
@@ -493,14 +494,15 @@ def on_webapp_data(message: types.Message):
             bot.send_message(user_id, "Некорректное значение количества гостей.")
             return
 
-        # ===== Парсинг даты и времени =====
+        # ===== ПАРСИНГ ДАТЫ И ВРЕМЕНИ =====
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         booking_time = datetime.strptime(time_slot, '%H:%M').time()
         booking_datetime_naive = datetime.combine(booking_date, booking_time)
         local_tz = tz.gettz("Europe/Moscow")
         booking_datetime = booking_datetime_naive.astimezone(local_tz)
 
-        # ===== Уведомление для 10+ гостей =====
+        # ===== УВЕДОМЛЕНИЕ ДЛЯ 10+ ГОСТЕЙ =====
+        admin_note = ""
         if guests >= 10:
             notice_text = (
                 "⚠️ При количестве гостей 10 и более необходимо согласовать предварительный заказ. "
@@ -508,19 +510,14 @@ def on_webapp_data(message: types.Message):
             )
             bot.send_message(user_id, notice_text)
             admin_note = "⚠️ ВНИМАНИЕ: гостей больше 10 — согласовать заказ."
-        else:
-            admin_note = ""
 
-        # ===== Генерация слотов для 3 часов =====
-        slots_to_book = []
-        for i in range(6):  # 6 слотов по 30 минут
-            slot_time_str = (booking_datetime + timedelta(minutes=30*i)).strftime("%H:%M")
-            slots_to_book.append(slot_time_str)
+        # ===== ГЕНЕРАЦИЯ СЛОТОВ НА 3 ЧАСА =====
+        slots_to_book = [(booking_datetime + timedelta(minutes=30*i)).strftime("%H:%M") for i in range(6)]
 
-        # ===== Работа с БД =====
+        # ===== РАБОТА С БД =====
         with db_connect() as conn:
             with conn.cursor() as cursor:
-                # Проверка занятости столов
+                # Проверка занятости всех слотов сразу
                 cursor.execute(
                     """
                     SELECT time_slot 
@@ -531,7 +528,10 @@ def on_webapp_data(message: types.Message):
                 )
                 conflicts = [row['time_slot'] for row in cursor.fetchall()]
                 if conflicts:
-                    bot.send_message(user_id, f"Стол {table_id} уже забронирован на слоты: {', '.join(conflicts)}. Выберите другое время.")
+                    bot.send_message(
+                        user_id,
+                        f"Стол {table_id} уже забронирован на слоты: {', '.join(conflicts)}. Выберите другое время."
+                    )
                     return
 
                 # Вставка всех слотов
@@ -544,11 +544,16 @@ def on_webapp_data(message: types.Message):
                         (user_id, user_name, phone, table_id, slot, guests, datetime.now(tz=local_tz), booking_datetime)
                     )
                 conn.commit()
+                print(f"[{datetime.now()}] Бронь создана для user_id: {user_id}, стол: {table_id}, слоты: {', '.join(slots_to_book)} {date_str}")
 
-        # ===== Уведомления пользователю и админу =====
+        # ===== УВЕДОМЛЕНИЯ ПОЛЬЗОВАТЕЛЮ =====
         formatted_date = booking_date.strftime("%d.%m.%Y")
-        bot.send_message(user_id, f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}")
+        bot.send_message(
+            user_id,
+            f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}"
+        )
 
+        # ===== УВЕДОМЛЕНИЕ АДМИНУ =====
         if ADMIN_ID:
             user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>'
             admin_message_text = (

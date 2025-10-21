@@ -460,48 +460,6 @@ def on_cancel_user(call: types.CallbackQuery):
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
 
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("admin_cancel_"))
-def on_cancel_admin(call: types.CallbackQuery):
-    """Отмена брони администратором."""
-    print(f"[{datetime.now()}] (Обработчик) Получен callback для отмены брони админом '{call.data}' от user_id: {call.from_user.id}")
-    booking_id = int(call.data.split("_")[2])
-    if not ADMIN_ID or str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "У вас нет прав для этого действия.", show_alert=True)
-        return
-    try:
-        booking_info = None
-        
-        with db_connect() as conn:
-            with conn.cursor() as cur:
-                # Получаем инфо до удаления
-                cur.execute("SELECT user_id, user_name, table_id, time_slot, booking_for, phone FROM bookings WHERE booking_id=%s;", (booking_id,))
-                booking_info = cur.fetchone()
-
-                # Удаляем запись
-                cur.execute("DELETE FROM bookings WHERE booking_id=%s;", (booking_id,))
-                conn.commit()
-        
-        if booking_info:
-            user_id = booking_info['user_id']
-            local_tz = tz.gettz("Europe/Moscow")
-            booking_for_dt = booking_info['booking_for'].astimezone(local_tz) if booking_info['booking_for'].tzinfo else booking_info['booking_for']
-            booking_date = booking_for_dt.strftime("%d.%m.%Y")
-            
-            message_text = f"❌ Ваша бронь отменена администратором.\n\nСтол: {booking_info['table_id']}\nДата: {booking_date}\nВремя: {booking_info['time_slot']}"
-            try:
-                bot.send_message(user_id, message_text)
-                print(f"[{datetime.now()}] (Обработчик) Уведомление пользователю {user_id} об отмене брони #{booking_id} отправлено.")
-            except Exception as e:
-                print(f"[{datetime.now()}] (Обработчик) Не удалось уведомить пользователя {user_id} об отмене брони: {e}")
-
-        bot.edit_message_text(f"Бронь #{booking_id} успешно отменена.", chat_id=call.message.chat.id, message_id=call.message.id)
-        bot.answer_callback_query(call.id, "Бронь отменена.", show_alert=True)
-        print(f"[{datetime.now()}] (Обработчик) Бронь #{booking_id} отменена админом {call.from_user.id}")
-    except Exception as e:
-        print(f"[{datetime.now()}] (Обработчик) Ошибка при отмене брони админом {call.from_user.id} брони #{booking_id}: {e}")
-        bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
-
-
 @bot.message_handler(content_types=['web_app_data'])
 def on_webapp_data(message: types.Message):
     """Обработка данных, пришедших из WebApp."""
@@ -523,22 +481,26 @@ def on_webapp_data(message: types.Message):
         # ===== ВАЛИДАЦИЯ ДАННЫХ =====
         phone_pattern = r'^\+375(25|29|33|44)\d{7}$'
         if not re.match(phone_pattern, phone):
-            return {"status": "error", "message": "Неверный формат телефона. Укажите в формате +375 (ХХ) ХХХХХХХ."}, 400
+            bot.send_message(user_id, "Неверный формат телефона. Укажите в формате +375XXXXXXXXX.")
+            return
 
         try:
             guests = int(guests)
             if guests < 1 or guests > 20:
-                return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
+                bot.send_message(user_id, "Количество гостей должно быть от 1 до 20.")
+                return
         except ValueError:
-            return {"status": "error", "message": "Некорректное значение количества гостей."}, 400
-        # =============================
+            bot.send_message(user_id, "Некорректное значение количества гостей.")
+            return
 
+        # ===== Парсинг даты и времени =====
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-        booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
+        booking_time = datetime.strptime(time_slot, '%H:%M').time()
+        booking_datetime_naive = datetime.combine(booking_date, booking_time)
         local_tz = tz.gettz("Europe/Moscow")
         booking_datetime = booking_datetime_naive.astimezone(local_tz)
 
-        # ===== ПРИГОТОВКА УВЕДОМЛЕНИЯ ДЛЯ 10+ ГОСТЕЙ =====
+        # ===== Уведомление для 10+ гостей =====
         if guests >= 10:
             notice_text = (
                 "⚠️ При количестве гостей 10 и более необходимо согласовать предварительный заказ. "
@@ -548,47 +510,47 @@ def on_webapp_data(message: types.Message):
             admin_note = "⚠️ ВНИМАНИЕ: гостей больше 10 — согласовать заказ."
         else:
             admin_note = ""
-        # ===================================================
 
-        # ===== Новый блок проверки для 3 часов (6 слотов по 30 минут) =====
-# ===== Новый блок для 3 часов (6 слотов по 30 минут) =====
-slots_to_book = []
-start_time = datetime.strptime(time_slot, "%H:%M")
-for i in range(6):  # 6 слотов = 3 часа
-    slot_time = (start_time + timedelta(minutes=30*i)).strftime("%H:%M")
-    slots_to_book.append(slot_time)
+        # ===== Генерация слотов для 3 часов =====
+        slots_to_book = []
+        for i in range(6):  # 6 слотов по 30 минут
+            slot_time_str = (booking_datetime + timedelta(minutes=30*i)).strftime("%H:%M")
+            slots_to_book.append(slot_time_str)
 
-# Проверка всех слотов на занятость
-cursor.execute(
-    """
-    SELECT time_slot 
-    FROM bookings 
-    WHERE table_id = %s AND booking_for::date = %s AND time_slot = ANY(%s);
-    """,
-    (table_id, booking_date, slots_to_book)
-)
-conflicts = [row['time_slot'] for row in cursor.fetchall()]
-if conflicts:
-    bot.send_message(user_id, f"Стол {table_id} уже забронирован на следующие слоты: {', '.join(conflicts)}. Пожалуйста, выберите другое время.")
-    return
+        # ===== Работа с БД =====
+        with db_connect() as conn:
+            with conn.cursor() as cursor:
+                # Проверка занятости столов
+                cursor.execute(
+                    """
+                    SELECT time_slot 
+                    FROM bookings 
+                    WHERE table_id = %s AND booking_for::date = %s AND time_slot = ANY(%s);
+                    """,
+                    (table_id, booking_date, slots_to_book)
+                )
+                conflicts = [row['time_slot'] for row in cursor.fetchall()]
+                if conflicts:
+                    bot.send_message(user_id, f"Стол {table_id} уже забронирован на слоты: {', '.join(conflicts)}. Выберите другое время.")
+                    return
 
-# Вставляем каждый слот в БД
-for slot in slots_to_book:
-    cursor.execute(
-        """
-        INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
-        """,
-        (user_id, user_name, phone, table_id, slot, guests, datetime.now(tz=local_tz), booking_datetime)
-    )
-conn.commit()  # ✅ вызов функции commit
+                # Вставка всех слотов
+                for slot in slots_to_book:
+                    cursor.execute(
+                        """
+                        INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                        """,
+                        (user_id, user_name, phone, table_id, slot, guests, datetime.now(tz=local_tz), booking_datetime)
+                    )
+                conn.commit()
 
-
+        # ===== Уведомления пользователю и админу =====
         formatted_date = booking_date.strftime("%d.%m.%Y")
         bot.send_message(user_id, f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}")
 
         if ADMIN_ID:
-            user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
+            user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>'
             admin_message_text = (
                 f"Новая бронь:\n"
                 f"Пользователь: {user_link}\n"
@@ -602,11 +564,11 @@ conn.commit()  # ✅ вызов функции commit
             bot.send_message(ADMIN_ID, admin_message_text, parse_mode="HTML")
 
     except json.JSONDecodeError as e:
-        print(f"[{datetime.now()}] (Обработчик) Ошибка парсинга JSON из WebApp: {e}")
+        print(f"[{datetime.now()}] Ошибка парсинга JSON: {e}")
         bot.send_message(message.from_user.id, "Ошибка в данных от WebApp. Попробуйте снова.")
     except Exception as e:
-        print(f"[{datetime.now()}] (Обработчик) Ошибка обработки WebApp данных: {e}")
-        bot.send_message(message.from_user.id, "Произошла ошибка при бронировании. Пожалуйста, попробуйте позже.")
+        print(f"[{datetime.now()}] Ошибка обработки WebApp данных: {e}")
+        bot.send_message(message.from_user.id, "Произошла ошибка при бронировании. Попробуйте позже.")
 
 # =========================
 # BOOKING API

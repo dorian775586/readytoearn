@@ -593,10 +593,8 @@ def book_api():
         date_str = data.get('date')
 
         if not all([guests, table_id, time_slot, date_str]):
-            print(f"[{datetime.now()}] Ошибка: Не хватает данных для бронирования.")
             return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
 
-        # ===== ВАЛИДАЦИЯ КОЛИЧЕСТВА ГОСТЕЙ =====
         try:
             guests = int(guests)
             if guests < 1 or guests > 20:
@@ -604,16 +602,13 @@ def book_api():
         except ValueError:
             return {"status": "error", "message": "Некорректное значение количества гостей."}, 400
 
-        # ===== Подготовка даты и времени брони =====
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
         local_tz = tz.gettz("Europe/Moscow")
         booking_datetime = booking_datetime_naive.replace(tzinfo=local_tz)
 
-        # ===== Генерация слотов для 3 часов (6 слотов по 30 минут) =====
         slots_to_book = [(datetime.strptime(time_slot, "%H:%M") + timedelta(minutes=30*i)).strftime("%H:%M") for i in range(6)]
 
-        # ===== Работа с БД =====
         with db_connect() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
@@ -626,12 +621,8 @@ def book_api():
                 )
                 conflicts = [row['time_slot'] for row in cursor.fetchall()]
                 if conflicts:
-                    return {
-                        "status": "error",
-                        "message": f"Стол {table_id} уже забронирован на слоты: {', '.join(conflicts)}. Выберите другое время."
-                    }, 409
+                    return {"status": "error", "message": f"Стол {table_id} уже забронирован на слоты: {', '.join(conflicts)}"}, 409
 
-                # Вставка всех слотов
                 cursor.executemany(
                     """
                     INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
@@ -640,54 +631,32 @@ def book_api():
                     [(user_id, user_name, phone, table_id, slot, guests, datetime.now(tz=local_tz), booking_datetime) for slot in slots_to_book]
                 )
                 conn.commit()
-                print(f"[{datetime.now()}] Бронь создана для user_id: {user_id}, стол: {table_id}, слоты: {', '.join(slots_to_book)} {date_str}")
+
+        # ===== УВЕДОМЛЕНИЕ ПОЛЬЗОВАТЕЛЮ =====
+        try:
+            formatted_date = booking_date.strftime("%d.%m.%Y")
+            notice_text = f"✅ Ваша бронь успешно оформлена!\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}"
+            if guests >= 10:
+                notice_text += "\n⚠️ При количестве гостей 10 и более необходимо согласовать предварительный заказ."
+            bot.send_message(user_id, notice_text)
+        except Exception as e:
+            print(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
+
+        # ===== УВЕДОМЛЕНИЕ АДМИНУ =====
+        if ADMIN_ID:
+            try:
+                user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>'
+                admin_note = "⚠️ ВНИМАНИЕ: гостей больше 10 — согласовать заказ." if guests >= 10 else ""
+                message_text = f"Новая бронь:\nПользователь: {user_link}\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}\nГостей: {guests}\nТелефон: {phone or 'Не указан'}\n{admin_note}"
+                bot.send_message(ADMIN_ID, message_text, parse_mode="HTML")
+            except Exception as e:
+                print(f"Не удалось отправить сообщение админу: {e}")
 
         return {"status": "ok", "message": "Бронь успешно создана"}, 200
 
     except Exception as e:
         print(f"[{datetime.now()}] Ошибка /book: {e}")
         return {"status": "error", "message": str(e)}, 500
-            # ===== УВЕДОМЛЕНИЕ ПОЛЬЗОВАТЕЛЮ =====
-            try:
-                formatted_date = booking_date.strftime("%d.%m.%Y")
-                notice_text = f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}"
-                
-                # Уведомление при 10+ гостях
-                admin_note = ""
-                if guests >= 10:
-                    notice_text += "\n\n⚠️ При количестве гостей 10 и более необходимо согласовать предварительный заказ. Администратор свяжется с Вами."
-                    admin_note = "⚠️ ВНИМАНИЕ: гостей больше 10 — согласовать заказ."
-
-                bot.send_message(user_id, notice_text)
-                print(f"[{datetime.now()}] Уведомление пользователю {user_id} о брони отправлено.")
-            except Exception as e:
-                print(f"[{datetime.now()}] Не удалось отправить уведомление пользователю {user_id}: {e}")
-
-            # ===== УВЕДОМЛЕНИЕ АДМИНУ =====
-            if ADMIN_ID:
-                try:
-                    formatted_date = booking_date.strftime("%d.%m.%Y")
-                    user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
-                    message_text = (
-                        f"Новая бронь:\n"
-                        f"Пользователь: {user_link}\n"
-                        f"Стол: {table_id}\n"
-                        f"Дата: {formatted_date}\n"
-                        f"Время: {time_slot}\n"
-                        f"Гостей: {guests}\n"
-                        f"Телефон: {phone or 'Не указан'}\n"
-                        f"{admin_note}"
-                    )
-                    bot.send_message(ADMIN_ID, message_text, parse_mode="HTML")
-                    print(f"[{datetime.now()}] Уведомление админу о новой брони отправлено.")
-                except Exception as e:
-                    print(f"[{datetime.now()}] Не удалось отправить сообщение админу: {e}")
-
-        return {"status": "ok", "message": "Бронь успешно создана"}, 200
-
-    except Exception as e:
-        logging.error(f"[{datetime.now()}] Ошибка /book: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}, 400
 
 
 # =========================

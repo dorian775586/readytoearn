@@ -590,42 +590,54 @@ def book_api():
         if not all([guests, table_id, time_slot, date_str]):
             print(f"[{datetime.now()}] Ошибка: Не хватает данных для бронирования.")
             return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
+# ===== ВАЛИДАЦИЯ КОЛИЧЕСТВА ГОСТЕЙ =====
+try:
+    guests = int(guests)
+    if guests < 1 or guests > 20:
+        return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
+except ValueError:
+    return {"status": "error", "message": "Некорректное значение количества гостей."}, 400
+# ======================================
 
-        # ===== ВАЛИДАЦИЯ КОЛИЧЕСТВА ГОСТЕЙ =====
-        try:
-            guests = int(guests)
-            if guests < 1 or guests > 20:
-                return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
-        except ValueError:
-            return {"status": "error", "message": "Некорректное значение количества гостей."}, 400
-        # ======================================
+# ===== Подготовка даты и времени брони =====
+booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
+local_tz = tz.gettz("Europe/Moscow")
+booking_datetime = booking_datetime_naive.astimezone(local_tz)
 
-        booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-        booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
-        local_tz = tz.gettz("Europe/Moscow")
-        booking_datetime = booking_datetime_naive.astimezone(local_tz)
+# ===== Работа с БД и бронирование 3 часов (6 слотов по 30 минут) =====
+slots_to_book = [(datetime.strptime(time_slot, "%H:%M") + timedelta(minutes=30*i)).strftime("%H:%M") for i in range(6)]
 
-        with db_connect() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "SELECT 1 FROM bookings WHERE table_id = %s AND booking_for::date = %s AND time_slot = %s;",
-                    (table_id, booking_date, time_slot)
-                )
-                existing_booking = cursor.fetchone()
-                if existing_booking:
-                    print(f"[{datetime.now()}] Ошибка: Стол {table_id} уже забронирован на {date_str} {time_slot}.")
-                    return {"status": "error", "message": "Этот стол уже забронирован на это время."}, 409
+with db_connect() as conn:
+    with conn.cursor() as cursor:
+        # Проверка занятости всех слотов сразу
+        cursor.execute(
+            """
+            SELECT time_slot 
+            FROM bookings 
+            WHERE table_id = %s AND booking_for::date = %s AND time_slot = ANY(%s);
+            """,
+            (table_id, booking_date, slots_to_book)
+        )
+        conflicts = [row['time_slot'] for row in cursor.fetchall()]
+        if conflicts:
+            return {
+                "status": "error",
+                "message": f"Стол {table_id} уже забронирован на слоты: {', '.join(conflicts)}. Выберите другое время."
+            }, 409
 
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
-                    """,
-                    (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(tz=local_tz), booking_datetime)
-                )
-                conn.commit()
-                print(f"[{datetime.now()}] Бронь создана для user_id: {user_id}, стол: {table_id}, время: {time_slot} {date_str}")
+        # Вставка всех слотов брони
+        cursor.executemany(
+            """
+            INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+            """,
+            [(user_id, user_name, phone, table_id, slot, guests, datetime.now(tz=local_tz), booking_datetime) for slot in slots_to_book]
+        )
+        conn.commit()
+
+        print(f"[{datetime.now()}] Бронь создана для user_id: {user_id}, стол: {table_id}, слоты: {', '.join(slots_to_book)} {date_str}")
+
 
             # ===== УВЕДОМЛЕНИЕ ПОЛЬЗОВАТЕЛЮ =====
             try:

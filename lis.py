@@ -255,7 +255,7 @@ def on_my_booking(message: types.Message):
                     FROM bookings
                     WHERE user_id=%s AND booking_for > NOW()
                     ORDER BY booking_for ASC
-                    LIMIT 100;
+                    LIMIT 1;
                 """, (message.from_user.id,))
                 row = cur.fetchone()
         
@@ -504,11 +504,12 @@ def on_cancel_admin(call: types.CallbackQuery):
 
 @bot.message_handler(content_types=['web_app_data'])
 def on_webapp_data(message: types.Message):
-    user_id = message.from_user.id
-    user_name = message.from_user.full_name or "Неизвестный"
-    
+    """Обработка данных, пришедших из WebApp."""
+    print(f"[{datetime.now()}] (Обработчик) ПРИШЛИ ДАННЫЕ ОТ WEBAPP: {message.web_app_data.data}") 
     try:
         data = json.loads(message.web_app_data.data)
+        user_id = message.from_user.id
+        user_name = message.from_user.full_name or "Неизвестный"
         phone = data.get('phone')
         guests = data.get('guests')
         table_id = data.get('table')
@@ -519,87 +520,25 @@ def on_webapp_data(message: types.Message):
             bot.send_message(user_id, "Ошибка: Не хватает данных для бронирования через WebApp.")
             return
 
-        # валидация телефона
+        # ===== ВАЛИДАЦИЯ ДАННЫХ =====
         phone_pattern = r'^\+375(25|29|33|44)\d{7}$'
         if not re.match(phone_pattern, phone):
-            bot.send_message(user_id, "Неверный формат телефона.")
-            return
+            return {"status": "error", "message": "Неверный формат телефона. Укажите в формате +375 (ХХ) ХХХХХХХ."}, 400
 
-        # валидация гостей
         try:
             guests = int(guests)
             if guests < 1 or guests > 20:
-                bot.send_message(user_id, "Количество гостей должно быть от 1 до 20.")
-                return
+                return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
         except ValueError:
-            bot.send_message(user_id, "Некорректное значение количества гостей.")
-            return
+            return {"status": "error", "message": "Некорректное значение количества гостей."}, 400
+        # =============================
 
-    except json.JSONDecodeError as e:
-        print(f"[{datetime.now()}] Ошибка парсинга JSON из WebApp: {e}")
-        bot.send_message(user_id, "Ошибка в данных от WebApp. Попробуйте снова.")
-        return
-    except Exception as e:
-        print(f"[{datetime.now()}] Ошибка обработки данных WebApp: {e}")
-        bot.send_message(user_id, "Произошла ошибка при обработке данных.")
-        return
-
-    # Парсим дату и время
-    try:
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-        booking_time_start = datetime.strptime(time_slot, '%H:%M').time()
+        booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
         local_tz = tz.gettz("Europe/Moscow")
-    except Exception as e:
-        print(f"[{datetime.now()}] Ошибка парсинга даты/времени: {e}")
-        bot.send_message(user_id, "Некорректная дата или время.")
-        return
+        booking_datetime = booking_datetime_naive.astimezone(local_tz)
 
-    # Генерируем список из 3-х блокируемых слотов
-    blocked_slots = []
-    base_datetime = datetime.combine(booking_date, booking_time_start)
-    DURATION_HOURS = 3
-
-    for i in range(DURATION_HOURS):
-        slot_datetime_naive = base_datetime + timedelta(hours=i)
-        if slot_datetime_naive.date() != booking_date:
-            break
-        blocked_slots.append({
-            'time_slot': slot_datetime_naive.strftime('%H:%M'),
-            'booking_for': slot_datetime_naive.astimezone(local_tz)
-        })
-
-    if not blocked_slots:
-        bot.send_message(user_id, "Ошибка: Невозможно создать бронь с 3-часовой блокировкой.")
-        return
-
-    try:
-        with db_connect() as conn:
-            with conn.cursor() as cursor:
-                # Проверка конфликтов для всех слотов
-                for slot in blocked_slots:
-                    cursor.execute(
-                        "SELECT 1 FROM bookings WHERE table_id = %s AND booking_for::date = %s AND time_slot = %s;",
-                        (table_id, booking_date, slot['time_slot'])
-                    )
-                    if cursor.fetchone():
-                        bot.send_message(user_id, f"Стол {table_id} уже забронирован на {date_str} {slot['time_slot']}. Пожалуйста, выберите другое время.")
-                        return
-
-                # Вставка всех слотов
-                for slot in blocked_slots:
-                    cursor.execute(
-                        """
-                        INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
-                        """,
-                        (user_id, user_name, phone, table_id, slot['time_slot'], guests, datetime.now(tz=local_tz), slot['booking_for'])
-                    )
-                conn.commit()
-
-        print(f"[{datetime.now()}] Бронь и блокировка созданы для user_id: {user_id}, стол: {table_id}, время: {time_slot} {date_str} ({len(blocked_slots)} слотов)")
-
-        # Уведомление для больших групп
-        admin_note = ""
+        # ===== ПРИГОТОВКА УВЕДОМЛЕНИЯ ДЛЯ 10+ ГОСТЕЙ =====
         if guests >= 10:
             notice_text = (
                 "⚠️ При количестве гостей 10 и более необходимо согласовать предварительный заказ. "
@@ -607,12 +546,47 @@ def on_webapp_data(message: types.Message):
             )
             bot.send_message(user_id, notice_text)
             admin_note = "⚠️ ВНИМАНИЕ: гостей больше 10 — согласовать заказ."
+        else:
+            admin_note = ""
+        # ===================================================
 
-        # Финальное сообщение пользователю
+        # ===== Новый блок проверки для 3 часов (6 слотов по 30 минут) =====
+# ===== Новый блок для 3 часов (6 слотов по 30 минут) =====
+slots_to_book = []
+start_time = datetime.strptime(time_slot, "%H:%M")
+for i in range(6):  # 6 слотов = 3 часа
+    slot_time = (start_time + timedelta(minutes=30*i)).strftime("%H:%M")
+    slots_to_book.append(slot_time)
+
+# Проверка всех слотов на занятость
+cursor.execute(
+    """
+    SELECT time_slot 
+    FROM bookings 
+    WHERE table_id = %s AND booking_for::date = %s AND time_slot = ANY(%s);
+    """,
+    (table_id, booking_date, slots_to_book)
+)
+conflicts = [row['time_slot'] for row in cursor.fetchall()]
+if conflicts:
+    bot.send_message(user_id, f"Стол {table_id} уже забронирован на следующие слоты: {', '.join(conflicts)}. Пожалуйста, выберите другое время.")
+    return
+
+# Вставляем каждый слот в БД
+for slot in slots_to_book:
+    cursor.execute(
+        """
+        INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+        """,
+        (user_id, user_name, phone, table_id, slot, guests, datetime.now(tz=local_tz), booking_datetime)
+    )
+conn.commit()  # ✅ вызов функции commit
+
+
         formatted_date = booking_date.strftime("%d.%m.%Y")
         bot.send_message(user_id, f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}")
 
-        # Уведомление админу
         if ADMIN_ID:
             user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
             admin_message_text = (
@@ -627,10 +601,12 @@ def on_webapp_data(message: types.Message):
             )
             bot.send_message(ADMIN_ID, admin_message_text, parse_mode="HTML")
 
+    except json.JSONDecodeError as e:
+        print(f"[{datetime.now()}] (Обработчик) Ошибка парсинга JSON из WebApp: {e}")
+        bot.send_message(message.from_user.id, "Ошибка в данных от WebApp. Попробуйте снова.")
     except Exception as e:
-        print(f"[{datetime.now()}] Ошибка при записи в базу или уведомлении: {e}")
-        bot.send_message(user_id, "Произошла ошибка при бронировании. Пожалуйста, попробуйте позже.")
-
+        print(f"[{datetime.now()}] (Обработчик) Ошибка обработки WebApp данных: {e}")
+        bot.send_message(message.from_user.id, "Произошла ошибка при бронировании. Пожалуйста, попробуйте позже.")
 
 # =========================
 # BOOKING API
@@ -662,57 +638,37 @@ def book_api():
             return {"status": "error", "message": "Некорректное значение количества гостей."}, 400
         # ======================================
 
-       # --- Этот блок должен начинаться с 4-х пробелов отступа (если находится внутри функции) ---
-    booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-    booking_time_start = datetime.strptime(time_slot, '%H:%M').time()
-    local_tz = tz.gettz("Europe/Moscow")
-    
-    # --- Генерируем список из 3-х блокируемых слотов
-    blocked_slots = []
-    base_datetime = datetime.combine(booking_date, booking_time_start)
-    DURATION_HOURS = 3 
-    
-    for i in range(DURATION_HOURS): 
-        slot_datetime_naive = base_datetime + timedelta(hours=i)
-        
-        if slot_datetime_naive.date() != booking_date:
-            break # Останавливаем, если перешли на следующий день
+        booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
+        local_tz = tz.gettz("Europe/Moscow")
+        booking_datetime = booking_datetime_naive.astimezone(local_tz)
 
-        blocked_slots.append({
-            'time_slot': slot_datetime_naive.strftime('%H:%M'),
-            'booking_for': slot_datetime_naive.astimezone(local_tz) 
-        })
-        
-    if not blocked_slots:
-        return {"status": "error", "message": "Ошибка: Невозможно создать бронь с 3-часовой блокировкой."}, 400
-
-    with db_connect() as conn:
-        with conn.cursor() as cursor:
-            # 1. Проверка конфликтов для всех 3-х слотов
-            for slot in blocked_slots:
+        with db_connect() as conn:
+            with conn.cursor() as cursor:
                 cursor.execute(
                     "SELECT 1 FROM bookings WHERE table_id = %s AND booking_for::date = %s AND time_slot = %s;",
-                    (table_id, booking_date, slot['time_slot'])
+                    (table_id, booking_date, time_slot)
                 )
-                if cursor.fetchone():
-                    print(f"[{datetime.now()}] Ошибка: Стол {table_id} уже забронирован на {date_str} {slot['time_slot']}.")
-                    return {"status": "error", "message": f"Этот стол занят с {slot['time_slot']}."}, 409
-                
-            # 2. Вставляем все 3 записи (бронь + 2 блокировки)
-            for slot in blocked_slots:
+                existing_booking = cursor.fetchone()
+                if existing_booking:
+                    print(f"[{datetime.now()}] Ошибка: Стол {table_id} уже забронирован на {date_str} {time_slot}.")
+                    return {"status": "error", "message": "Этот стол уже забронирован на это время."}, 409
+
+            with conn.cursor() as cursor:
                 cursor.execute(
                     """
                     INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
                     """,
-                    (user_id, user_name, phone, table_id, slot['time_slot'], guests, datetime.now(tz=local_tz), slot['booking_for'])
+                    (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(tz=local_tz), booking_datetime)
                 )
-            conn.commit()
-            print(f"[{datetime.now()}] Бронь и блокировка созданы для user_id: {user_id}, стол: {table_id}, время: {time_slot} {date_str} (+2ч блокировка)")
+                conn.commit()
+                print(f"[{datetime.now()}] Бронь создана для user_id: {user_id}, стол: {table_id}, время: {time_slot} {date_str}")
+
             # ===== УВЕДОМЛЕНИЕ ПОЛЬЗОВАТЕЛЮ =====
             try:
                 formatted_date = booking_date.strftime("%d.%m.%Y")
-                notice_text = f"✅ Ваша бронь успешно оформлена! Ждите звонка Администратора!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}"
+                notice_text = f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}"
                 
                 # Уведомление при 10+ гостях
                 admin_note = ""

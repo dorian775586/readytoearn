@@ -224,17 +224,12 @@ def on_my_booking(message: types.Message):
             with conn.cursor() as cur:
                 # Показываем только основную бронь (первый слот в цепочке)
                 cur.execute("""
-                    SELECT b.booking_id, b.table_id, b.time_slot, b.booking_for, b.phone, b.guests
-                    FROM bookings b
-                    WHERE b.user_id = %s
-                      AND b.booking_for > NOW()
-                      AND b.time_slot = (
-                          SELECT MIN(time_slot)
-                          FROM bookings
-                          WHERE user_id = b.user_id
-                            AND booking_for = b.booking_for
-                      )
-                    ORDER BY b.booking_for ASC
+                    SELECT booking_id, table_id, time_slot, booking_for, phone, guests
+                    FROM bookings
+                    WHERE user_id = %s
+                    AND is_main = TRUE
+                    AND booking_for > NOW()
+                    ORDER BY booking_for ASC
                     LIMIT 1;
                 """, (message.from_user.id,))
                 row = cur.fetchone()
@@ -393,9 +388,21 @@ def on_cancel_user(call: types.CallbackQuery):
                 booking_info = cur.fetchone()
                 
                 # Удаляем запись
-                cur.execute("DELETE FROM bookings WHERE booking_id=%s AND user_id=%s;", (booking_id, call.from_user.id))
-                rows_deleted = cur.rowcount
-                conn.commit()
+                # Получаем booking_for и table_id по booking_id
+                cur.execute("""
+                    SELECT booking_for, table_id 
+                    FROM bookings 
+                    WHERE booking_id=%s AND user_id=%s
+                """, (booking_id, call.from_user.id))
+                booking_info = cur.fetchone()
+
+                if booking_info:
+                    cur.execute("""
+                        DELETE FROM bookings 
+                        WHERE user_id=%s AND table_id=%s AND booking_for=%s
+                    """, (call.from_user.id, booking_info['table_id'], booking_info['booking_for']))
+
+
         
         if rows_deleted > 0:
             bot.edit_message_text("Бронь отменена.", chat_id=call.message.chat.id, message_id=call.message.id)
@@ -556,6 +563,67 @@ def on_webapp_data(message: types.Message):
     except Exception as e:
         print(f"[{datetime.now()}] Ошибка обработки WebApp данных: {e}")
         bot.send_message(message.from_user.id, "Произошла ошибка при бронировании. Попробуйте позже.")
+
+    @bot.message_handler(func=lambda m: "Управление" in m.text)
+def on_admin_panel(message: types.Message):
+    """Отображение активных бронирований для админа с основной и вспомогательной бронью."""
+    print(f"[{datetime.now()}] (Обработчик) Нажата кнопка 'Управление' от user_id: {message.from_user.id}")
+    if not ADMIN_ID or str(message.chat.id) != str(ADMIN_ID):
+        bot.send_message(message.chat.id, "У вас нет прав для этой команды.")
+        return
+
+    try:
+        with db_connect() as conn:
+            with conn.cursor() as cur:
+                # Берем все будущие брони, сортируем по пользователю и дате
+                cur.execute("""
+                    SELECT user_id, user_name, table_id, time_slot, booking_for, guests, phone, is_main
+                    FROM bookings
+                    WHERE booking_for > NOW()
+                    ORDER BY user_id, table_id, booking_for, time_slot;
+                """)
+                rows = cur.fetchall()
+
+        if not rows:
+            bot.send_message(message.chat.id, "Активных бронирований нет.")
+            return
+
+        # Группируем по пользователю + стол
+        from collections import defaultdict
+        grouped = defaultdict(lambda: defaultdict(list))  # user_id -> table_id -> list of bookings
+
+        for r in rows:
+            grouped[r['user_id']][r['table_id']].append(r)
+
+        local_tz = tz.gettz("Europe/Moscow")
+
+        for user_id, tables in grouped.items():
+            user_name = None
+            message_text = ""
+            for table_id, bookings in tables.items():
+                user_name = bookings[0]['user_name'] or "Неизвестный"
+                # Определяем основной и вспомогательные слоты
+                main_booking = next((b for b in bookings if b['is_main']), bookings[0])
+                other_bookings = [b for b in bookings if not b['is_main']]
+
+                main_time = main_booking['time_slot']
+                last_time = bookings[-1]['time_slot']
+                booking_for_dt = main_booking['booking_for'].astimezone(local_tz) if main_booking['booking_for'].tzinfo else main_booking['booking_for']
+                booking_date = booking_for_dt.strftime("%d.%m.%Y")
+
+                message_text += f"🔖 Пользователь: <a href='tg://user?id={user_id}'>{user_name}</a>\n"
+                message_text += f"   - Стол: {table_id}\n"
+                message_text += f"   - Основная бронь: {main_time}\n"
+                message_text += f"   - Блокировка стола до: {last_time} ({booking_date})\n"
+                message_text += f"   - Гостей: {main_booking.get('guests', 'N/A')}\n"
+                message_text += f"   - Телефон: {main_booking.get('phone', 'Не указан')}\n\n"
+
+
+            bot.send_message(message.chat.id, message_text, parse_mode="HTML")
+
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Ошибка админ-панели: {e}")
+        print(f"[{datetime.now()}] Ошибка админ-панели: {e}")
 
 # =========================
 # BOOKING API

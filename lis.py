@@ -376,19 +376,16 @@ def on_cancel_user(call: types.CallbackQuery):
     try:
         booking_info = None
         rows_deleted = 0
-        
+
         with db_connect() as conn:
             with conn.cursor() as cur:
-                # Получаем инфо до удаления
                 cur.execute("""
                     SELECT user_id, user_name, table_id, time_slot, booking_for, phone, guests
                     FROM bookings
                     WHERE booking_id=%s AND user_id=%s;
                 """, (booking_id, call.from_user.id))
                 booking_info = cur.fetchone()
-                
-                # Удаляем запись
-                # Получаем booking_for и table_id по booking_id
+
                 cur.execute("""
                     SELECT booking_for, table_id 
                     FROM bookings 
@@ -402,12 +399,10 @@ def on_cancel_user(call: types.CallbackQuery):
                         WHERE user_id=%s AND table_id=%s AND booking_for=%s
                     """, (call.from_user.id, booking_info['table_id'], booking_info['booking_for']))
 
-
-        
         if rows_deleted > 0:
             bot.edit_message_text("Бронь отменена.", chat_id=call.message.chat.id, message_id=call.message.id)
             print(f"[{datetime.now()}] (Обработчик) Бронь #{booking_id} отменена пользователем {call.from_user.id}")
-            
+
             if ADMIN_ID and booking_info:
                 try:
                     local_tz = tz.gettz("Europe/Moscow")
@@ -416,7 +411,7 @@ def on_cancel_user(call: types.CallbackQuery):
                     user_id = booking_info['user_id']
                     user_name = booking_info['user_name'] or call.from_user.full_name or 'Неизвестный пользователь'
                     user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
-                    
+
                     message_text = (
                         f"❌ Бронь отменена пользователем:\n"
                         f"ID Брони: <b>#{booking_id}</b>\n"
@@ -431,11 +426,10 @@ def on_cancel_user(call: types.CallbackQuery):
                     print(f"[{datetime.now()}] (Обработчик) Уведомление админа об отмене брони #{booking_id} отправлено.")
                 except Exception as e:
                     print(f"[{datetime.now()}] (Обработчик) Не удалось уведомить админа об отмене брони: {e}")
-
         else:
             bot.answer_callback_query(call.id, "Бронь уже была отменена или не найдена.", show_alert=True)
             print(f"[{datetime.now()}] (Обработчик) Пользователь {call.from_user.id} пытался отменить несуществующую/уже отмененную бронь #{booking_id}")
-            
+
     except Exception as e:
         print(f"[{datetime.now()}] (Обработчик) Ошибка при отмене брони пользователем {call.from_user.id} брони #{booking_id}: {e}")
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
@@ -444,7 +438,7 @@ def on_cancel_user(call: types.CallbackQuery):
 @bot.message_handler(content_types=['web_app_data'])
 def on_webapp_data(message: types.Message):
     """Обработка данных, пришедших из WebApp."""
-    print(f"[{datetime.now()}] (Обработчик) ПРИШЛИ ДАННЫЕ ОТ WEBAPP: {message.web_app_data.data}") 
+    print(f"[{datetime.now()}] (Обработчик) ПРИШЛИ ДАННЫЕ ОТ WEBAPP: {message.web_app_data.data}")
 
     try:
         data = json.loads(message.web_app_data.data)
@@ -564,9 +558,13 @@ def on_webapp_data(message: types.Message):
         print(f"[{datetime.now()}] Ошибка обработки WebApp данных: {e}")
         bot.send_message(message.from_user.id, "Произошла ошибка при бронировании. Попробуйте позже.")
 
-    @bot.message_handler(func=lambda m: "Управление" in m.text)
+
+# =========================
+# ADMIN PANEL
+# =========================
+@bot.message_handler(func=lambda m: "Управление" in m.text)
 def on_admin_panel(message: types.Message):
-    """Отображение активных бронирований для админа с основной и вспомогательной бронью."""
+    """Отображение активных бронирований для админа с основной бронью."""
     print(f"[{datetime.now()}] (Обработчик) Нажата кнопка 'Управление' от user_id: {message.from_user.id}")
     if not ADMIN_ID or str(message.chat.id) != str(ADMIN_ID):
         bot.send_message(message.chat.id, "У вас нет прав для этой команды.")
@@ -575,7 +573,6 @@ def on_admin_panel(message: types.Message):
     try:
         with db_connect() as conn:
             with conn.cursor() as cur:
-                # Берем все будущие брони, сортируем по пользователю и дате
                 cur.execute("""
                     SELECT user_id, user_name, table_id, time_slot, booking_for, guests, phone, is_main
                     FROM bookings
@@ -588,9 +585,8 @@ def on_admin_panel(message: types.Message):
             bot.send_message(message.chat.id, "Активных бронирований нет.")
             return
 
-        # Группируем по пользователю + стол
         from collections import defaultdict
-        grouped = defaultdict(lambda: defaultdict(list))  # user_id -> table_id -> list of bookings
+        grouped = defaultdict(lambda: defaultdict(list))
 
         for r in rows:
             grouped[r['user_id']][r['table_id']].append(r)
@@ -602,22 +598,17 @@ def on_admin_panel(message: types.Message):
             message_text = ""
             for table_id, bookings in tables.items():
                 user_name = bookings[0]['user_name'] or "Неизвестный"
-                # Определяем основной и вспомогательные слоты
                 main_booking = next((b for b in bookings if b['is_main']), bookings[0])
-                other_bookings = [b for b in bookings if not b['is_main']]
-
-                main_time = main_booking['time_slot']
                 last_time = bookings[-1]['time_slot']
                 booking_for_dt = main_booking['booking_for'].astimezone(local_tz) if main_booking['booking_for'].tzinfo else main_booking['booking_for']
                 booking_date = booking_for_dt.strftime("%d.%m.%Y")
 
                 message_text += f"🔖 Пользователь: <a href='tg://user?id={user_id}'>{user_name}</a>\n"
                 message_text += f"   - Стол: {table_id}\n"
-                message_text += f"   - Основная бронь: {main_time}\n"
+                message_text += f"   - Основная бронь: {main_booking['time_slot']}\n"
                 message_text += f"   - Блокировка стола до: {last_time} ({booking_date})\n"
                 message_text += f"   - Гостей: {main_booking.get('guests', 'N/A')}\n"
                 message_text += f"   - Телефон: {main_booking.get('phone', 'Не указан')}\n\n"
-
 
             bot.send_message(message.chat.id, message_text, parse_mode="HTML")
 

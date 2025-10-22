@@ -525,9 +525,11 @@ for i, slot in enumerate(slots_to_book):
             guests,
             datetime.now(tz=local_tz),
             booking_datetime,
-            i == 0  # Первая запись = основная
+            i == 0
         )
     )
+conn.commit()
+
 
 conn.commit()
 print(f"[{datetime.now()}] Бронь создана для user_id: {user_id}, стол: {table_id}, основные и вспомогательные слоты: {', '.join(slots_to_book)} {date_str}")

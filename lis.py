@@ -209,23 +209,22 @@ def cmd_start(message: types.Message):
             print(f"[{datetime.now()}] (Обработчик) НЕ УДАЛОСЬ ОТПРАВИТЬ СООБЩЕНИЕ ОБ ОШИБКЕ пользователю {user_id}: {e_inner}")
 
 
-@bot.message_handler(commands=["history"])
-def cmd_history(message: types.Message):
-    """Отображение истории для админа."""
-    print(f"[{datetime.now()}] (Обработчик) Получена команда /history от user_id: {message.from_user.id}")
-    if not ADMIN_ID or str(message.chat.id) != str(ADMIN_ID):
-        bot.send_message(message.chat.id, "У вас нет прав для этой команды.")
-        return
-    try:
-        with db_connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT booking_id, user_name, table_id, time_slot, booked_at, booking_for
-                    FROM bookings
-                    ORDER BY booked_at DESC
-                    LIMIT 50;
-                """)
-                rows = cur.fetchall()
+cur.execute("""
+    SELECT b.booking_id, b.table_id, b.time_slot, b.booking_for, b.phone, b.guests
+    FROM bookings b
+    WHERE b.user_id = %s
+      AND b.booking_for > NOW()
+      AND b.time_slot = (
+          SELECT MIN(time_slot)
+          FROM bookings
+          WHERE user_id = b.user_id
+            AND booking_for = b.booking_for
+      )
+    ORDER BY b.booking_for ASC
+    LIMIT 1;
+""", (message.from_user.id,))
+row = cur.fetchone()
+
         if not rows:
             bot.send_message(message.chat.id, "История пуста.")
             return
@@ -534,17 +533,29 @@ def on_webapp_data(message: types.Message):
                     )
                     return
 
-                # Вставка всех слотов
-                for slot in slots_to_book:
-                    cursor.execute(
-                        """
-                        INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
-                        """,
-                        (user_id, user_name, phone, table_id, slot, guests, datetime.now(tz=local_tz), booking_datetime)
-                    )
-                conn.commit()
-                print(f"[{datetime.now()}] Бронь создана для user_id: {user_id}, стол: {table_id}, слоты: {', '.join(slots_to_book)} {date_str}")
+                # Вставка всех слотов брони (каждые 30 минут)
+for i, slot in enumerate(slots_to_book):
+    cursor.execute(
+        """
+        INSERT INTO bookings (
+            user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for, is_main
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+        """,
+        (
+            user_id,
+            user_name,
+            phone,
+            table_id,
+            slot,
+            guests,
+            datetime.now(tz=local_tz),
+            booking_datetime,
+            i == 0  # Первая запись = основная
+        )
+    )
+
+conn.commit()
+print(f"[{datetime.now()}] Бронь создана для user_id: {user_id}, стол: {table_id}, основные и вспомогательные слоты: {', '.join(slots_to_book)} {date_str}")
 
         # ===== УВЕДОМЛЕНИЯ ПОЛЬЗОВАТЕЛЮ =====
         formatted_date = booking_date.strftime("%d.%m.%Y")

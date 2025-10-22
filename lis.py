@@ -554,8 +554,13 @@ def on_webapp_data(message: types.Message):
             with conn.cursor() as cursor:
                 # Проверка на конфликт
                 cursor.execute(
-                    "SELECT 1 FROM bookings WHERE table_id = %s AND booking_for::date = %s AND time_slot = %s;",
-                    (table_id, booking_date, time_slot)
+                    """
+                    SELECT 1 FROM bookings
+                    WHERE table_id = %s
+                    AND booking_for + INTERVAL '3 hours' > %s
+                    AND booking_for <= %s;
+                    """,
+                    (table_id, booking_datetime, booking_datetime)
                 )
                 if cursor.fetchone():
                     bot.send_message(user_id, f"Стол {table_id} уже забронирован на {date_str} {time_slot}. Пожалуйста, выберите другое время.")
@@ -633,9 +638,14 @@ def book_api():
         with db_connect() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT 1 FROM bookings WHERE table_id = %s AND booking_for::date = %s AND time_slot = %s;",
-                    (table_id, booking_date, time_slot)
-                )
+                        """
+                        SELECT 1 FROM bookings
+                        WHERE table_id = %s
+                        AND booking_for + INTERVAL '3 hours' > %s
+                        AND booking_for <= %s;
+                        """,
+                        (table_id, booking_datetime, booking_datetime)
+                    )
                 existing_booking = cursor.fetchone()
                 if existing_booking:
                     print(f"[{datetime.now()}] Ошибка: Стол {table_id} уже забронирован на {date_str} {time_slot}.")
@@ -700,7 +710,7 @@ def book_api():
 # =========================
 @app.route("/get_booked_times", methods=["GET"])
 def get_booked_times():
-    """API для получения свободных временных слотов с учётом 3-часовой бронь."""
+    """API для получения свободных временных слотов с учётом 3-часовой брони."""
     try:
         table_id = request.args.get('table')
         date_str = request.args.get('date')
@@ -715,16 +725,17 @@ def get_booked_times():
         start_time = datetime.combine(query_date, datetime.strptime("12:00", "%H:%M").time()).replace(tzinfo=local_tz)
         end_time = datetime.combine(query_date, datetime.strptime("23:00", "%H:%M").time()).replace(tzinfo=local_tz)
 
-        # Получаем все броньки на выбранный стол
+        # Получаем все брони на выбранный стол
         with db_connect() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
                     "SELECT booking_for FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
                     (table_id, query_date)
                 )
-                bookings = [row['booking_for'] for row in cursor.fetchall()]
+                bookings = [row['booking_for'].astimezone(local_tz) if row['booking_for'].tzinfo else row['booking_for'].replace(tzinfo=local_tz)
+                            for row in cursor.fetchall()]
 
-        # Генерируем все слоты
+        # Генерируем все слоты с шагом 30 минут
         all_slots = []
         slot_time = start_time
         now_local = datetime.now(tz=local_tz)
@@ -733,13 +744,13 @@ def get_booked_times():
             # Считаем слот занятым, если он попадает в любой диапазон 3-х часовой брони
             is_free = True
             for b in bookings:
-                booking_start = b.astimezone(local_tz) if b.tzinfo else b
-                booking_end = booking_start + timedelta(hours=3)
+                booking_start = b
+                booking_end = b + timedelta(hours=3)
                 if booking_start <= slot_time < booking_end:
                     is_free = False
                     break
 
-            # Пропускаем прошлые слоты
+            # Пропускаем прошлые слоты (минутная подстраховка)
             if slot_time < now_local + timedelta(minutes=30):
                 is_free = False
 

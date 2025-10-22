@@ -488,80 +488,83 @@ def on_webapp_data(message: types.Message):
         # ===== ГЕНЕРАЦИЯ СЛОТОВ НА 3 ЧАСА =====
         slots_to_book = [(booking_datetime + timedelta(minutes=30*i)).strftime("%H:%M") for i in range(6)]
 
-        # ===== РАБОТА С БД =====
-        with db_connect() as conn:
-            with conn.cursor() as cursor:
-                # Проверка занятости всех слотов сразу
-                cursor.execute(
-                    """
-                    SELECT time_slot 
-                    FROM bookings 
-                    WHERE table_id = %s AND booking_for::date = %s AND time_slot = ANY(%s);
-                    """,
-                    (table_id, booking_date, slots_to_book)
-                )
-                conflicts = [row['time_slot'] for row in cursor.fetchall()]
-                if conflicts:
-                    bot.send_message(
-                        user_id,
-                        f"Стол {table_id} уже забронирован на слоты: {', '.join(conflicts)}. Выберите другое время."
-                    )
-                    return
-
-                # Вставка всех слотов брони (каждые 30 минут)
-for i, slot in enumerate(slots_to_book):
-    cursor.execute(
-        """
-        INSERT INTO bookings (
-            user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for, is_main
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
-        """,
-        (
-            user_id,
-            user_name,
-            phone,
-            table_id,
-            slot,
-            guests,
-            datetime.now(tz=local_tz),
-            booking_datetime,
-            i == 0
+# ===== РАБОТА С БД =====
+with db_connect() as conn:
+    with conn.cursor() as cursor:
+        # Проверка занятости всех слотов сразу
+        cursor.execute(
+            """
+            SELECT time_slot 
+            FROM bookings 
+            WHERE table_id = %s AND booking_for::date = %s AND time_slot = ANY(%s);
+            """,
+            (table_id, booking_date, slots_to_book)
         )
-    )
-conn.commit()
-
-
-conn.commit()
-print(f"[{datetime.now()}] Бронь создана для user_id: {user_id}, стол: {table_id}, основные и вспомогательные слоты: {', '.join(slots_to_book)} {date_str}")
-
-        # ===== УВЕДОМЛЕНИЯ ПОЛЬЗОВАТЕЛЮ =====
-        formatted_date = booking_date.strftime("%d.%m.%Y")
-        bot.send_message(
-            user_id,
-            f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}"
-        )
-
-        # ===== УВЕДОМЛЕНИЕ АДМИНУ =====
-        if ADMIN_ID:
-            user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>'
-            admin_message_text = (
-                f"Новая бронь:\n"
-                f"Пользователь: {user_link}\n"
-                f"Стол: {table_id}\n"
-                f"Дата: {formatted_date}\n"
-                f"Время: {time_slot}\n"
-                f"Гостей: {guests}\n"
-                f"Телефон: {phone}\n"
-                f"{admin_note}"
+        conflicts = [row['time_slot'] for row in cursor.fetchall()]
+        if conflicts:
+            bot.send_message(
+                user_id,
+                f"Стол {table_id} уже забронирован на слоты: {', '.join(conflicts)}. Выберите другое время."
             )
-            bot.send_message(ADMIN_ID, admin_message_text, parse_mode="HTML")
+            return
 
-    except json.JSONDecodeError as e:
-        print(f"[{datetime.now()}] Ошибка парсинга JSON: {e}")
-        bot.send_message(message.from_user.id, "Ошибка в данных от WebApp. Попробуйте снова.")
-    except Exception as e:
-        print(f"[{datetime.now()}] Ошибка обработки WebApp данных: {e}")
-        bot.send_message(message.from_user.id, "Произошла ошибка при бронировании. Попробуйте позже.")
+        # Вставка всех слотов брони (каждые 30 минут)
+        for i, slot in enumerate(slots_to_book):
+            cursor.execute(
+                """
+                INSERT INTO bookings (
+                    user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for, is_main
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                """,
+                (
+                    user_id,
+                    user_name,
+                    phone,
+                    table_id,
+                    slot,
+                    guests,
+                    datetime.now(tz=local_tz),
+                    booking_datetime,
+                    i == 0
+                )
+            )
+
+    # Коммитим после вставки всех слотов
+    conn.commit()
+
+print(
+    f"[{datetime.now()}] Бронь создана для user_id: {user_id}, "
+    f"стол: {table_id}, основные и вспомогательные слоты: {', '.join(slots_to_book)} {date_str}"
+)
+
+# ===== УВЕДОМЛЕНИЯ ПОЛЬЗОВАТЕЛЮ =====
+formatted_date = booking_date.strftime("%d.%m.%Y")
+bot.send_message(
+    user_id,
+    f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}"
+)
+
+# ===== УВЕДОМЛЕНИЕ АДМИНУ =====
+if ADMIN_ID:
+    user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>'
+    admin_message_text = (
+        f"Новая бронь:\n"
+        f"Пользователь: {user_link}\n"
+        f"Стол: {table_id}\n"
+        f"Дата: {formatted_date}\n"
+        f"Время: {time_slot}\n"
+        f"Гостей: {guests}\n"
+        f"Телефон: {phone}\n"
+        f"{admin_note}"
+    )
+    bot.send_message(ADMIN_ID, admin_message_text, parse_mode="HTML")
+
+except json.JSONDecodeError as e:
+    print(f"[{datetime.now()}] Ошибка парсинга JSON: {e}")
+    bot.send_message(message.from_user.id, "Ошибка в данных от WebApp. Попробуйте снова.")
+except Exception as e:
+    print(f"[{datetime.now()}] Ошибка обработки WebApp данных: {e}")
+    bot.send_message(message.from_user.id, "Произошла ошибка при бронировании. Попробуйте позже.")
 
 # =========================
 # BOOKING API

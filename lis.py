@@ -700,61 +700,58 @@ def book_api():
 # =========================
 @app.route("/get_booked_times", methods=["GET"])
 def get_booked_times():
-    """API для получения списка свободных временных слотов."""
-    print(f"[{datetime.now()}] Получен GET запрос на /get_booked_times")
+    """API для получения свободных временных слотов с учётом 3-часовой бронь."""
     try:
         table_id = request.args.get('table')
         date_str = request.args.get('date')
 
         if not all([table_id, date_str]):
-            print(f"[{datetime.now()}] Ошибка: Не хватает данных (стол или дата) для get_booked_times.")
             return {"status": "error", "message": "Не хватает данных (стол или дата)"}, 400
 
-        try:
-            query_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-        except ValueError:
-            print(f"[{datetime.now()}] Ошибка: Неверный формат даты для get_booked_times.")
-            return {"status": "error", "message": "Неверный формат даты. Ожидается YYYY-MM-DD."}, 400
-
-        with db_connect() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "SELECT time_slot FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
-                    (table_id, query_date)
-                )
-                booked_times = [row['time_slot'] for row in cursor.fetchall()]
-
-        # Часовые пояса
+        query_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         local_tz = tz.gettz("Europe/Moscow")
 
         # Время работы ресторана
-        start_time_naive = datetime.combine(query_date, datetime.strptime("12:00", "%H:%M").time())
-        end_time_naive = datetime.combine(query_date, datetime.strptime("23:00", "%H:%M").time())
+        start_time = datetime.combine(query_date, datetime.strptime("12:00", "%H:%M").time()).replace(tzinfo=local_tz)
+        end_time = datetime.combine(query_date, datetime.strptime("23:00", "%H:%M").time()).replace(tzinfo=local_tz)
 
-        # Присваиваем часовой пояс
-        current_time = start_time_naive.replace(tzinfo=local_tz)
-        end_time = end_time_naive.replace(tzinfo=local_tz)
+        # Получаем все броньки на выбранный стол
+        with db_connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT booking_for FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
+                    (table_id, query_date)
+                )
+                bookings = [row['booking_for'] for row in cursor.fetchall()]
 
+        # Генерируем все слоты
         all_slots = []
+        slot_time = start_time
         now_local = datetime.now(tz=local_tz)
 
-        while current_time <= end_time:
-            slot_str = current_time.strftime("%H:%M")
+        while slot_time <= end_time:
+            # Считаем слот занятым, если он попадает в любой диапазон 3-х часовой брони
+            is_free = True
+            for b in bookings:
+                booking_start = b.astimezone(local_tz) if b.tzinfo else b
+                booking_end = booking_start + timedelta(hours=3)
+                if booking_start <= slot_time < booking_end:
+                    is_free = False
+                    break
 
-            # Проверка, если слот уже прошел СЕГОДНЯ
-            if current_time < now_local + timedelta(minutes=30):  # Добавляем буфер в 60 минут
-                current_time += timedelta(minutes=30)
-                continue
+            # Пропускаем прошлые слоты
+            if slot_time < now_local + timedelta(minutes=30):
+                is_free = False
 
-            if slot_str not in booked_times:
-                all_slots.append(slot_str)
-            current_time += timedelta(minutes=30)
+            if is_free:
+                all_slots.append(slot_time.strftime("%H:%M"))
 
-        print(f"[{datetime.now()}] get_booked_times: Возвращено {len(all_slots)} свободных слотов для стола {table_id} на {date_str}.")
+            slot_time += timedelta(minutes=30)
+
         return {"status": "ok", "free_times": all_slots}, 200
 
     except Exception as e:
-        logging.error(f"[{datetime.now()}] Ошибка /get_booked_times: {e}", exc_info=True)
+        logging.error(f"Ошибка /get_booked_times: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}, 500
 
 # =========================

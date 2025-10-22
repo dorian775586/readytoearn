@@ -196,7 +196,9 @@ def cmd_start(message: types.Message):
     try:
         bot.send_message(
             message.chat.id,
-            f"<b>Ресторан «{RESTAURANT_NAME}»</b> приветствует вас!\nТут вы можете дистанционно забронировать любой понравившийся столик и получить меню! Используйсте кнопки снизу",
+            f"<b>Ресторан «{RESTAURANT_NAME}»</b> приветствует вас!\n"
+            "Тут вы можете дистанционно забронировать любой понравившийся столик и получить меню! "
+            "Используйте кнопки снизу.",
             reply_markup=main_reply_kb(user_id, user_name),
             parse_mode="HTML"
         )
@@ -207,34 +209,6 @@ def cmd_start(message: types.Message):
             bot.send_message(message.chat.id, "Извините, произошла ошибка при загрузке приветствия. Попробуйте позже.")
         except Exception as e_inner:
             print(f"[{datetime.now()}] (Обработчик) НЕ УДАЛОСЬ ОТПРАВИТЬ СООБЩЕНИЕ ОБ ОШИБКЕ пользователю {user_id}: {e_inner}")
-
-
-cur.execute("""
-    SELECT b.booking_id, b.table_id, b.time_slot, b.booking_for, b.phone, b.guests
-    FROM bookings b
-    WHERE b.user_id = %s
-      AND b.booking_for > NOW()
-      AND b.time_slot = (
-          SELECT MIN(time_slot)
-          FROM bookings
-          WHERE user_id = b.user_id
-            AND booking_for = b.booking_for
-      )
-    ORDER BY b.booking_for ASC
-    LIMIT 1;
-""", (message.from_user.id,))
-row = cur.fetchone()
-
-        if not rows:
-            bot.send_message(message.chat.id, "История пуста.")
-            return
-        text = "<b>История бронирований (последние 50):</b>\n\n"
-        for r in rows:
-            booking_date = r['booking_for'].strftime("%d.%m.%Y")
-            text += f"#{r['booking_id']} — {r['user_name']}, стол {r['table_id']}, {r['time_slot']}, {booking_date}\n"
-        bot.send_message(message.chat.id, text)
-    except Exception as e:
-        bot.send_message(message.chat.id, f"Ошибка истории: {e}")
 
 
 @bot.message_handler(func=lambda m: "Моя бронь" in m.text)
@@ -248,12 +222,19 @@ def on_my_booking(message: types.Message):
 
         with db_connect() as conn:
             with conn.cursor() as cur:
-                # Ищем самую последнюю активную бронь (booking_for > NOW())
+                # Показываем только основную бронь (первый слот в цепочке)
                 cur.execute("""
-                    SELECT booking_id, table_id, time_slot, booking_for, phone, guests
-                    FROM bookings
-                    WHERE user_id=%s AND booking_for > NOW()
-                    ORDER BY booking_for ASC
+                    SELECT b.booking_id, b.table_id, b.time_slot, b.booking_for, b.phone, b.guests
+                    FROM bookings b
+                    WHERE b.user_id = %s
+                      AND b.booking_for > NOW()
+                      AND b.time_slot = (
+                          SELECT MIN(time_slot)
+                          FROM bookings
+                          WHERE user_id = b.user_id
+                            AND booking_for = b.booking_for
+                      )
+                    ORDER BY b.booking_for ASC
                     LIMIT 1;
                 """, (message.from_user.id,))
                 row = cur.fetchone()
@@ -265,9 +246,7 @@ def on_my_booking(message: types.Message):
             bot.send_message(message.chat.id, "У вас нет активной брони.", reply_markup=main_reply_kb(user_id, user_name))
             return
         
-        # Преобразование даты в локальный формат для пользователя
-        # Если booking_for - timezone aware (должен быть), to_datetime переведет его
-        booking_for_dt = row['booking_for'].astimezone(local_tz) if row['booking_for'].tzinfo else row['booking_for'] 
+        booking_for_dt = row['booking_for'].astimezone(local_tz) if row['booking_for'].tzinfo else row['booking_for']
         booking_date = booking_for_dt.strftime("%d.%m.%Y")
         
         kb = types.InlineKeyboardMarkup()
@@ -282,10 +261,7 @@ def on_my_booking(message: types.Message):
             f"Телефон: {row.get('phone', 'Не указан')}"
         )
         
-        bot.send_message(message.chat.id, 
-                         message_text, 
-                         parse_mode="HTML",
-                         reply_markup=kb)
+        bot.send_message(message.chat.id, message_text, parse_mode="HTML", reply_markup=kb)
     except Exception as e:
         print(f"[{datetime.now()}] (Обработчик) Ошибка в on_my_booking: {e}")
         bot.send_message(message.chat.id, "Ошибка при получении брони. Попробуйте позже.")
@@ -295,17 +271,17 @@ def on_my_booking(message: types.Message):
 def on_menu(message: types.Message):
     """Обработчик кнопки Меню."""
     print(f"[{datetime.now()}] (Обработчик) Нажата кнопка 'Меню' от user_id: {message.from_user.id}")
-    kb = types.InlineKeyboardMarkup(row_width=2) 
+    kb = types.InlineKeyboardMarkup(row_width=2)
     
     buttons = []
-    for name in MENU_CATEGORIES: 
+    for name in MENU_CATEGORIES:
         buttons.append(types.InlineKeyboardButton(name, callback_data=f"menu_cat_{name}"))
         
     kb.add(*buttons)
     
     try:
         bot.send_message(
-            message.chat.id, 
+            message.chat.id,
             "🍽️ Выберите интересующий вас раздел меню:",
             reply_markup=kb
         )
@@ -313,7 +289,6 @@ def on_menu(message: types.Message):
     except Exception as e:
         print(f"[{datetime.now()}] (Обработчик) Ошибка при отправке меню user_id: {message.from_user.id}: {e}")
         bot.send_message(message.chat.id, "Извините, произошла ошибка при загрузке меню. Попробуйте позже.")
-
 
 # =========================
 # АДМИН-ПАНЕЛЬ

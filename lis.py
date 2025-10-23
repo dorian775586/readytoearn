@@ -561,7 +561,7 @@ def on_webapp_data(message: types.Message):
             admin_note = ""
         # =======================================
 
-       with db_connect() as conn:
+        with db_connect() as conn:
             with conn.cursor() as cursor:
                 # Получаем все брони на выбранный стол и дату
                 cursor.execute(

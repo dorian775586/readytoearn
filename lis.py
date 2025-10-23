@@ -347,9 +347,9 @@ def on_admin_panel(message: types.Message):
             booking_date = booking_for_dt.strftime("%d.%m.%Y")
             
             text = f"🔖 Бронь #{r['booking_id']} — {r['user_name']}\n"
-            text += f"   - Стол: {r['table_id']}\n"
-            text += f"   - Время: {r['time_slot']} ({booking_date})\n"
-            text += f"   - Телефон: {r['phone']}\n"
+            text += f"   - Стол: {r['table_id']}\n"
+            text += f"   - Время: {r['time_slot']} ({booking_date})\n"
+            text += f"   - Телефон: {r['phone']}\n"
             
             kb = types.InlineKeyboardMarkup()
             kb.add(types.InlineKeyboardButton(text="❌ Отменить", callback_data=f"admin_cancel_{r['booking_id']}"))
@@ -523,14 +523,18 @@ def on_webapp_data(message: types.Message):
         # ===== ВАЛИДАЦИЯ ДАННЫХ =====
         phone_pattern = r'^\+375(25|29|33|44)\d{7}$'
         if not re.match(phone_pattern, phone):
-            return {"status": "error", "message": "Неверный формат телефона. Укажите в формате +375 (ХХ) ХХХХХХХ."}, 400
+            # В этом обработчике нельзя вернуть ответ HTTP, но можно отправить сообщение пользователю
+            bot.send_message(user_id, "Ошибка: Неверный формат телефона. Укажите в формате +375 (ХХ) ХХХХХХХ.")
+            return 
 
         try:
             guests = int(guests)
             if guests < 1 or guests > 20:
-                return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
+                bot.send_message(user_id, "Ошибка: Количество гостей должно быть от 1 до 20.")
+                return 
         except ValueError:
-            return {"status": "error", "message": "Некорректное значение количества гостей."}, 400
+            bot.send_message(user_id, "Ошибка: Некорректное значение количества гостей.")
+            return 
         # =============================
 
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
@@ -552,15 +556,15 @@ def on_webapp_data(message: types.Message):
 
         with db_connect() as conn:
             with conn.cursor() as cursor:
-                # Проверка на конфликт
+                ### ИЗМЕНЕНИЕ: УДАЛЕНИЕ 3-ЧАСОВОЙ ЛОГИКИ
+                # Проверка на конфликт: ищем, есть ли уже бронь на этот стол и на это точное время.
                 cursor.execute(
                     """
                     SELECT 1 FROM bookings
                     WHERE table_id = %s
-                    AND booking_for + INTERVAL '3 hours' > %s
-                    AND booking_for <= %s;
+                    AND booking_for = %s; 
                     """,
-                    (table_id, booking_datetime, booking_datetime)
+                    (table_id, booking_datetime)
                 )
                 if cursor.fetchone():
                     bot.send_message(user_id, f"Стол {table_id} уже забронирован на {date_str} {time_slot}. Пожалуйста, выберите другое время.")
@@ -637,15 +641,16 @@ def book_api():
 
         with db_connect() as conn:
             with conn.cursor() as cursor:
+                ### ИЗМЕНЕНИЕ: УДАЛЕНИЕ 3-ЧАСОВОЙ ЛОГИКИ
+                # Проверка на конфликт: ищем, есть ли уже бронь на этот стол и на это точное время.
                 cursor.execute(
-                        """
-                        SELECT 1 FROM bookings
-                        WHERE table_id = %s
-                        AND booking_for + INTERVAL '3 hours' > %s
-                        AND booking_for <= %s;
-                        """,
-                        (table_id, booking_datetime, booking_datetime)
-                    )
+                    """
+                    SELECT 1 FROM bookings
+                    WHERE table_id = %s
+                    AND booking_for = %s; 
+                    """,
+                    (table_id, booking_datetime)
+                )
                 existing_booking = cursor.fetchone()
                 if existing_booking:
                     print(f"[{datetime.now()}] Ошибка: Стол {table_id} уже забронирован на {date_str} {time_slot}.")
@@ -670,155 +675,31 @@ def book_api():
                 # Уведомление при 10+ гостях
                 admin_note = ""
                 if guests >= 10:
-                    notice_text += "\n\n⚠️ При количестве гостей 10 и более необходимо согласовать предварительный заказ. Администратор свяжется с Вами."
+                    notice_text += "\n\n⚠️ При количестве гостей 10 и более необходимо согласовать предварительный заказ. Администратор свяжется с Вами в ближайшее время!"
                     admin_note = "⚠️ ВНИМАНИЕ: гостей больше 10 — согласовать заказ."
+                
+                if user_id != 0:
+                    bot.send_message(user_id, notice_text)
 
-                bot.send_message(user_id, notice_text)
-                print(f"[{datetime.now()}] Уведомление пользователю {user_id} о брони отправлено.")
-            except Exception as e:
-                print(f"[{datetime.now()}] Не удалось отправить уведомление пользователю {user_id}: {e}")
-
-            # ===== УВЕДОМЛЕНИЕ АДМИНУ =====
-            if ADMIN_ID:
-                try:
-                    formatted_date = booking_date.strftime("%d.%m.%Y")
+                if ADMIN_ID:
                     user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
-                    message_text = (
+                    admin_message_text = (
                         f"Новая бронь:\n"
                         f"Пользователь: {user_link}\n"
                         f"Стол: {table_id}\n"
                         f"Дата: {formatted_date}\n"
                         f"Время: {time_slot}\n"
                         f"Гостей: {guests}\n"
-                        f"Телефон: {phone or 'Не указан'}\n"
+                        f"Телефон: {phone}\n"
                         f"{admin_note}"
                     )
-                    bot.send_message(ADMIN_ID, message_text, parse_mode="HTML")
-                    print(f"[{datetime.now()}] Уведомление админу о новой брони отправлено.")
-                except Exception as e:
-                    print(f"[{datetime.now()}] Не удалось отправить сообщение админу: {e}")
+                    bot.send_message(ADMIN_ID, admin_message_text, parse_mode="HTML")
 
-        return {"status": "ok", "message": "Бронь успешно создана"}, 200
+            except Exception as e:
+                print(f"[{datetime.now()}] Ошибка отправки уведомления ботом: {e}")
 
-    except Exception as e:
-        logging.error(f"[{datetime.now()}] Ошибка /book: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}, 400
-
-
-# =========================
-# GET BOOKED TIMES
-# =========================
-@app.route("/get_booked_times", methods=["GET"])
-def get_booked_times():
-    """API для получения свободных временных слотов с учётом 3-часовой брони."""
-    try:
-        table_id = request.args.get('table')
-        date_str = request.args.get('date')
-
-        if not all([table_id, date_str]):
-            return {"status": "error", "message": "Не хватает данных (стол или дата)"}, 400
-
-        query_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-        local_tz = tz.gettz("Europe/Moscow")
-
-        # Время работы ресторана
-        start_time = datetime.combine(query_date, datetime.strptime("12:00", "%H:%M").time()).replace(tzinfo=local_tz)
-        end_time = datetime.combine(query_date, datetime.strptime("23:00", "%H:%M").time()).replace(tzinfo=local_tz)
-
-        # Получаем все брони на выбранный стол
-        with db_connect() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "SELECT booking_for FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
-                    (table_id, query_date)
-                )
-                bookings = [row['booking_for'].astimezone(local_tz) if row['booking_for'].tzinfo else row['booking_for'].replace(tzinfo=local_tz)
-                            for row in cursor.fetchall()]
-
-        # Генерируем все слоты с шагом 30 минут
-        all_slots = []
-        slot_time = start_time
-        now_local = datetime.now(tz=local_tz)
-
-        while slot_time <= end_time:
-            # Считаем слот занятым, если он попадает в любой диапазон 3-х часовой брони
-            is_free = True
-            for b in bookings:
-                booking_start = b
-                booking_end = b + timedelta(hours=3)
-                if booking_start <= slot_time < booking_end:
-                    is_free = False
-                    break
-
-            # Пропускаем прошлые слоты (минутная подстраховка)
-            if slot_time < now_local + timedelta(minutes=30):
-                is_free = False
-
-            if is_free:
-                all_slots.append(slot_time.strftime("%H:%M"))
-
-            slot_time += timedelta(minutes=30)
-
-        return {"status": "ok", "free_times": all_slots}, 200
+        return {"status": "success", "message": "Бронь успешно создана."}
 
     except Exception as e:
-        logging.error(f"Ошибка /get_booked_times: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}, 500
-
-# =========================
-# Основные маршруты Flask
-# =========================
-@app.route("/")
-def index():
-    """Проверка доступности."""
-    print(f"[{datetime.now()}] Получен GET запрос на /")
-    return "Bot is running.", 200
-
-@app.route("/set_webhook_manual")
-def set_webhook_manual():
-    """Ручная установка вебхука (для инициализации)."""
-    print(f"[{datetime.now()}] Получен GET запрос на /set_webhook_manual")
-    if not RENDER_EXTERNAL_URL:
-        return jsonify({"status": "error", "message": "RENDER_EXTERNAL_URL is not set"}), 500
-    if not RENDER_EXTERNAL_URL.startswith("https://"):
-        return jsonify({"status": "error", "message": "Webhook requires HTTPS"}), 500
-
-    webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
-    try:
-        # УДАЛЕНИЕ + УСТАНОВКА
-        bot.remove_webhook()
-        print(f"[{datetime.now()}] Старый Webhook удален.")
-        ok = bot.set_webhook(url=webhook_url)
-        print(f"[{datetime.now()}] Попытка установки Webhook на {webhook_url}; Результат: {ok}")
-        if ok:
-            return jsonify({"status": "ok", "message": f"Webhook set to {webhook_url}"}), 200
-        else:
-            return jsonify({"status": "error", "message": "Failed to set webhook"}), 500
-    except Exception as e:
-        print(f"[{datetime.now()}] Ошибка при установке Webhook вручную: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    """КРИТИЧЕСКИЙ ОБРАБОТЧИК: Принимает данные от Telegram и передает их боту."""
-    print(f"[{datetime.now()}] Получен POST запрос на /webhook")
-    if request.headers.get("content-type") == "application/json":
-        json_string = request.get_data(as_text=True)
-        # !!! КРИТИЧЕСКИ ВАЖНО: Преобразование JSON в объект Update и обработка ботом
-        try:
-            update = types.Update.de_json(json_string)
-            bot.process_new_updates([update])
-            print(f"[{datetime.now()}] Webhook: Обновление успешно обработано.")
-            return "!", 200  # Обязательный ответ 200 OK для Telegram
-        except Exception as e:
-            # Логируем ошибку, но возвращаем 200, чтобы Telegram не пытался слать запрос снова.
-            print(f"[{datetime.now()}] Webhook: ОШИБКА ОБРАБОТКИ ОБНОВЛЕНИЯ: {e}")
-            return "!", 200
-    else:
-        print(f"[{datetime.now()}] Webhook: Получены не-JSON данные. Игнорирую.")
-        return "Non-JSON data received", 403
-
-# =========================
-# ЗАПУСК
-# =========================
-# В режиме Render/Gunicorn запуск не требуется (это делает Gunicorn)
+        print(f"[{datetime.now()}] КРИТИЧЕСКАЯ ОШИБКА в book_api: {e}")
+        return {"status": "error", "message": f"Ошибка сервера при бронировании: {e}"}, 500

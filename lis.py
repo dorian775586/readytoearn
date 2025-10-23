@@ -116,6 +116,8 @@ def init_db():
                     booking_for TIMESTAMP WITH TIME ZONE -- Изменено на TIMESTAMP WITH TIME ZONE
                 );
                 """)
+                cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS duration_hours INT DEFAULT 1;")
+
                 # Обновление структуры таблицы, если она была создана без столбцов
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS user_id BIGINT;")
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS user_name TEXT;")
@@ -504,7 +506,7 @@ def on_cancel_admin(call: types.CallbackQuery):
 
 @bot.message_handler(content_types=['web_app_data'])
 def on_webapp_data(message: types.Message):
-    """Обработка данных, пришедших из WebApp."""
+    """Обработка данных, пришедших из WebApp с учётом duration_hours."""
     print(f"[{datetime.now()}] (Обработчик) ПРИШЛИ ДАННЫЕ ОТ WEBAPP: {message.web_app_data.data}") 
     try:
         data = json.loads(message.web_app_data.data)
@@ -515,30 +517,39 @@ def on_webapp_data(message: types.Message):
         table_id = data.get('table')
         time_slot = data.get('time')
         date_str = data.get('date')
+        duration_hours = int(data.get('duration_hours', 1))  # новая длительность
 
         if not all([phone, guests, table_id, time_slot, date_str]):
             bot.send_message(user_id, "Ошибка: Не хватает данных для бронирования через WebApp.")
             return
 
-        # ===== ВАЛИДАЦИЯ ДАННЫХ =====
+        # ===== ВАЛИДАЦИЯ =====
         phone_pattern = r'^\+375(25|29|33|44)\d{7}$'
         if not re.match(phone_pattern, phone):
-            return {"status": "error", "message": "Неверный формат телефона. Укажите в формате +375 (ХХ) ХХХХХХХ."}, 400
+            bot.send_message(user_id, "Неверный формат телефона. Укажите в формате +375 (ХХ) ХХХХХХХ.")
+            return
 
         try:
             guests = int(guests)
             if guests < 1 or guests > 20:
-                return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
+                bot.send_message(user_id, "Количество гостей должно быть от 1 до 20.")
+                return
         except ValueError:
-            return {"status": "error", "message": "Некорректное значение количества гостей."}, 400
-        # =============================
+            bot.send_message(user_id, "Некорректное значение количества гостей.")
+            return
+
+        if duration_hours < 1 or duration_hours > 3:
+            bot.send_message(user_id, "Длительность брони должна быть от 1 до 3 часов.")
+            return
+        # ====================
 
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-        booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
+        booking_start_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
         local_tz = tz.gettz("Europe/Moscow")
-        booking_datetime = booking_datetime_naive.astimezone(local_tz)
+        booking_start = booking_start_naive.replace(tzinfo=local_tz)
+        booking_end = booking_start + timedelta(hours=duration_hours)
 
-        # ===== ПРИГОТОВКА УВЕДОМЛЕНИЯ ДЛЯ 10+ ГОСТЕЙ =====
+        # ===== Уведомление для 10+ гостей =====
         if guests >= 10:
             notice_text = (
                 "⚠️ При количестве гостей 10 и более необходимо согласовать предварительный заказ. "
@@ -548,37 +559,45 @@ def on_webapp_data(message: types.Message):
             admin_note = "⚠️ ВНИМАНИЕ: гостей больше 10 — согласовать заказ."
         else:
             admin_note = ""
-        # ===================================================
+        # =======================================
 
         with db_connect() as conn:
-            with conn.cursor() as cursor:
-                # Проверка на конфликт
-                cursor.execute(
-                    """
-                    SELECT 1 FROM bookings
-                    WHERE table_id = %s
-                    AND booking_for + INTERVAL '3 hours' > %s
-                    AND booking_for <= %s;
-                    """,
-                    (table_id, booking_datetime, booking_datetime)
-                )
-                if cursor.fetchone():
-                    bot.send_message(user_id, f"Стол {table_id} уже забронирован на {date_str} {time_slot}. Пожалуйста, выберите другое время.")
-                    return
+    with conn.cursor() as cursor:
+        # Получаем все брони на выбранный стол и дату
+        cursor.execute(
+            "SELECT booking_for, duration_hours FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
+            (table_id, booking_date)
+        )
+        existing_bookings = cursor.fetchall()
 
-                # Вставка брони
-                cursor.execute(
-                    """
-                    INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
-                    """,
-                    (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(tz=local_tz), booking_datetime)
-                )
-                conn.commit()
+        # Проверка пересечения интервалов в Python
+        conflict = False
+        for b in existing_bookings:
+            b_start = b['booking_for'].astimezone(local_tz) if b['booking_for'].tzinfo else b['booking_for'].replace(tzinfo=local_tz)
+            b_end = b_start + timedelta(hours=b.get('duration_hours', 1))
+            if booking_start < b_end and booking_end > b_start:
+                conflict = True
+                break
+
+        if conflict:
+            bot.send_message(user_id, f"Стол {table_id} уже забронирован на {date_str} {time_slot}. Пожалуйста, выберите другое время.")
+            return
+
+        # Вставка брони с duration_hours
+        cursor.execute(
+            """
+            INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for, duration_hours)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+            """,
+            (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(tz=local_tz), booking_start, duration_hours)
+        )
+        conn.commit()
+
 
         formatted_date = booking_date.strftime("%d.%m.%Y")
-        bot.send_message(user_id, f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}")
+        bot.send_message(user_id, f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}\nДлительность: {duration_hours} ч.")
 
+        # ===== Уведомление админа =====
         if ADMIN_ID:
             user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
             admin_message_text = (
@@ -587,6 +606,7 @@ def on_webapp_data(message: types.Message):
                 f"Стол: {table_id}\n"
                 f"Дата: {formatted_date}\n"
                 f"Время: {time_slot}\n"
+                f"Длительность: {duration_hours} ч.\n"
                 f"Гостей: {guests}\n"
                 f"Телефон: {phone}\n"
                 f"{admin_note}"
@@ -594,10 +614,10 @@ def on_webapp_data(message: types.Message):
             bot.send_message(ADMIN_ID, admin_message_text, parse_mode="HTML")
 
     except json.JSONDecodeError as e:
-        print(f"[{datetime.now()}] (Обработчик) Ошибка парсинга JSON из WebApp: {e}")
+        print(f"[{datetime.now()}] Ошибка парсинга JSON из WebApp: {e}")
         bot.send_message(message.from_user.id, "Ошибка в данных от WebApp. Попробуйте снова.")
     except Exception as e:
-        print(f"[{datetime.now()}] (Обработчик) Ошибка обработки WebApp данных: {e}")
+        print(f"[{datetime.now()}] Ошибка обработки WebApp данных: {e}")
         bot.send_message(message.from_user.id, "Произошла ошибка при бронировании. Пожалуйста, попробуйте позже.")
 
 # =========================
@@ -605,9 +625,9 @@ def on_webapp_data(message: types.Message):
 # =========================
 @app.route("/book", methods=["POST"])
 def book_api():
-    """API для бронирования с выбором длительности (1-3 часа)."""
+    """API для бронирования с выбором длительности (1–3 часа)."""
     try:
-        data = request.json
+        data = request.json or {}
         user_id = data.get('user_id') or 0
         user_name = data.get('user_name') or 'Неизвестный'
         phone = data.get('phone')
@@ -615,11 +635,13 @@ def book_api():
         table_id = data.get('table')
         time_slot = data.get('time')
         date_str = data.get('date')
-        duration_hours = int(data.get('duration_hours', 1))  # Новое поле
+        duration_hours = int(data.get('duration_hours', 1))  # Длительность брони
 
+        # Проверка длительности
         if duration_hours < 1 or duration_hours > 3:
             return {"status": "error", "message": "Длительность брони должна быть от 1 до 3 часов."}, 400
 
+        # Проверка обязательных полей
         if not all([guests, table_id, time_slot, date_str]):
             return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
 
@@ -627,6 +649,7 @@ def book_api():
         if guests < 1 or guests > 20:
             return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
 
+        # Дата и время брони
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         booking_start = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
         local_tz = tz.gettz("Europe/Moscow")
@@ -641,15 +664,11 @@ def book_api():
                     (table_id, booking_date)
                 )
                 existing = cursor.fetchall()
-                conflict = False
                 for b in existing:
                     exist_start = b['booking_for'].astimezone(local_tz) if b['booking_for'].tzinfo else b['booking_for'].replace(tzinfo=local_tz)
-                    exist_end = exist_start + timedelta(hours=b.get('duration_hours', 3))
+                    exist_end = exist_start + timedelta(hours=b.get('duration_hours', 1))
                     if booking_start < exist_end and booking_end > exist_start:
-                        conflict = True
-                        break
-                if conflict:
-                    return {"status": "error", "message": "Стол уже занят на выбранное время."}, 409
+                        return {"status": "error", "message": "Стол уже занят на выбранное время."}, 409
 
                 # Вставка брони
                 cursor.execute(
@@ -662,11 +681,19 @@ def book_api():
                 conn.commit()
 
         formatted_date = booking_date.strftime("%d.%m.%Y")
-        bot.send_message(user_id, f"✅ Ваша бронь успешно оформлена!\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}\nДлительность: {duration_hours} ч.")
 
+        # Уведомление пользователя
+        bot.send_message(user_id,
+                         f"✅ Ваша бронь успешно оформлена!\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}\nДлительность: {duration_hours} ч.")
+
+        # Уведомление администратора
         if ADMIN_ID:
             user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>'
-            bot.send_message(ADMIN_ID, f"Новая бронь:\nПользователь: {user_link}\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}\nДлительность: {duration_hours} ч.\nГостей: {guests}\nТелефон: {phone or 'Не указан'}", parse_mode="HTML")
+            bot.send_message(
+                ADMIN_ID,
+                f"Новая бронь:\nПользователь: {user_link}\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}\nДлительность: {duration_hours} ч.\nГостей: {guests}\nТелефон: {phone or 'Не указан'}",
+                parse_mode="HTML"
+            )
 
         return {"status": "ok", "message": "Бронь успешно создана"}, 200
 
@@ -674,9 +701,8 @@ def book_api():
         logging.error(f"[{datetime.now()}] Ошибка /book: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}, 500
 
-
 # =========================
-# GET BOOKED TIMES (обновлённый)
+# GET BOOKED TIMES (гибкие слоты)
 # =========================
 @app.route("/get_booked_times", methods=["GET"])
 def get_booked_times():
@@ -689,27 +715,41 @@ def get_booked_times():
 
         query_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         local_tz = tz.gettz("Europe/Moscow")
+
+        # Время работы ресторана
         start_time = datetime.combine(query_date, datetime.strptime("12:00", "%H:%M").time()).replace(tzinfo=local_tz)
         end_time = datetime.combine(query_date, datetime.strptime("23:00", "%H:%M").time()).replace(tzinfo=local_tz)
 
+        # Получаем все брони на выбранный стол
         with db_connect() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT booking_for, duration_hours FROM bookings WHERE table_id = %s AND booking_for::date = %s;", (table_id, query_date))
+                cursor.execute(
+                    "SELECT booking_for, duration_hours FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
+                    (table_id, query_date)
+                )
                 bookings = cursor.fetchall()
 
         all_slots = []
         slot_time = start_time
         now_local = datetime.now(tz=local_tz)
+
         while slot_time <= end_time:
             is_free = True
             for b in bookings:
                 b_start = b['booking_for'].astimezone(local_tz) if b['booking_for'].tzinfo else b['booking_for'].replace(tzinfo=local_tz)
-                b_end = b_start + timedelta(hours=b.get('duration_hours', 3))
+                duration = b.get('duration_hours') or 1  # если нет duration, ставим 1 час по умолчанию
+                b_end = b_start + timedelta(hours=duration)
                 if b_start <= slot_time < b_end:
                     is_free = False
                     break
-            if slot_time >= now_local + timedelta(minutes=30) and is_free:
+
+            # Пропускаем прошлые слоты (минутная подстраховка)
+            if slot_time < now_local + timedelta(minutes=30):
+                is_free = False
+
+            if is_free:
                 all_slots.append(slot_time.strftime("%H:%M"))
+
             slot_time += timedelta(minutes=30)
 
         return {"status": "ok", "free_times": all_slots}, 200
@@ -717,4 +757,3 @@ def get_booked_times():
     except Exception as e:
         logging.error(f"[{datetime.now()}] Ошибка /get_booked_times: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}, 500
-  

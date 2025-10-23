@@ -546,7 +546,8 @@ def on_webapp_data(message: types.Message):
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         booking_start_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
         local_tz = tz.gettz("Europe/Moscow")
-        booking_start = booking_start_naive.replace(tzinfo=local_tz)
+        local_tz = timezone("Europe/Moscow")
+        booking_start = local_tz.localize(booking_start_naive)
         booking_end = booking_start + timedelta(hours=duration_hours)
 
         # ===== Уведомление для 10+ гостей =====
@@ -563,14 +564,20 @@ def on_webapp_data(message: types.Message):
 
         with db_connect() as conn:
             with conn.cursor() as cursor:
-                # Получаем все брони на выбранный стол и дату
-                cursor.execute(
-                    "SELECT booking_for, duration_hours FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
-                    (table_id, booking_date)
-                )
+                # Включаем явную транзакцию
+                conn.autocommit = False
+
+                # Блокируем все брони на этот стол на выбранную дату
+                cursor.execute("""
+                    SELECT booking_id, booking_for, duration_hours
+                    FROM bookings
+                    WHERE table_id = %s AND booking_for::date = %s
+                    FOR UPDATE;
+                """, (table_id, booking_date))
+
                 existing_bookings = cursor.fetchall()
 
-                # Проверка пересечения интервалов в Python
+                # Проверка пересечения интервалов
                 conflict = False
                 for b in existing_bookings:
                     b_start = b['booking_for'].astimezone(local_tz) if b['booking_for'].tzinfo else b['booking_for'].replace(tzinfo=local_tz)
@@ -580,20 +587,22 @@ def on_webapp_data(message: types.Message):
                         break
 
                 if conflict:
+                    conn.rollback()  # отменяем транзакцию
                     bot.send_message(user_id, f"Стол {table_id} уже забронирован на {date_str} {time_slot}. Пожалуйста, выберите другое время.")
                     return
 
+                # Вставка брони
+                duration_hours = int(duration_hours or 1)  # если вдруг None
+                    cursor.execute(
+                        """
+                        INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for, duration_hours)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                        """,
+                        (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(tz=local_tz), booking_start, duration_hours)
+                    )
 
+                conn.commit()
 
-        # Вставка брони с duration_hours
-        cursor.execute(
-            """
-            INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for, duration_hours)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
-            """,
-            (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(tz=local_tz), booking_start, duration_hours)
-        )
-        conn.commit()
 
 
         formatted_date = booking_date.strftime("%d.%m.%Y")
@@ -673,13 +682,16 @@ def book_api():
                         return {"status": "error", "message": "Стол уже занят на выбранное время."}, 409
 
                 # Вставка брони
-                cursor.execute(
-                    """
-                    INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for, duration_hours)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
-                    """,
-                    (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(tz=local_tz), booking_start, duration_hours)
-                )
+                duration_hours = int(duration_hours or 1)  # если вдруг None
+                    cursor.execute(
+                        """
+                        INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for, duration_hours)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                        """,
+                        (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(tz=local_tz), booking_start, duration_hours)
+                    )
+                    , user_name, phone, table_id, time_slot, guests, datetime.now(tz=local_tz), booking_start, duration_hours)
+                                    )
                 conn.commit()
 
         formatted_date = booking_date.strftime("%d.%m.%Y")
@@ -708,55 +720,49 @@ def book_api():
 # =========================
 @app.route("/get_booked_times", methods=["GET"])
 def get_booked_times():
-    """API для получения свободных слотов с учётом желаемой длительности брони."""
     try:
         table_id = request.args.get('table')
         date_str = request.args.get('date')
-        duration_hours = int(request.args.get('duration_hours', 1))  # НОВОЕ
+        duration_hours = int(request.args.get('duration_hours', 1))
+
         if not all([table_id, date_str]):
             return {"status": "error", "message": "Не хватает данных (стол или дата)"}, 400
 
+        from pytz import timezone
+        local_tz = timezone("Europe/Moscow")
         query_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-        local_tz = tz.gettz("Europe/Moscow")
 
-        start_time = datetime.combine(query_date, datetime.strptime("12:00", "%H:%M").time()).replace(tzinfo=local_tz)
-        end_time = datetime.combine(query_date, datetime.strptime("23:00", "%H:%M").time()).replace(tzinfo=local_tz)
+        start_time = local_tz.localize(datetime.combine(query_date, datetime.strptime("12:00", "%H:%M").time()))
+        end_time = local_tz.localize(datetime.combine(query_date, datetime.strptime("23:00", "%H:%M").time()))
+        now_ts = datetime.now(local_tz).timestamp() + 1800  # 30 минут буфер
 
         with db_connect() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT booking_for, duration_hours FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
+                    "SELECT booking_for, duration_hours FROM bookings WHERE table_id=%s AND booking_for::date=%s;",
                     (table_id, query_date)
                 )
                 bookings = cursor.fetchall()
 
+        busy_intervals = []
+        for b in bookings:
+            b_start = b['booking_for'].astimezone(local_tz).timestamp() if b['booking_for'].tzinfo else local_tz.localize(b['booking_for']).timestamp()
+            b_end = b_start + (b.get('duration_hours') or 1) * 3600
+            busy_intervals.append((b_start, b_end))
+
         all_slots = []
         slot_time = start_time
-        now_local = datetime.now(tz=local_tz)
+        slot_duration_sec = duration_hours * 3600
 
-        while slot_time <= end_time:
-            is_free = True
+        while slot_time + timedelta(hours=duration_hours) <= end_time:
+            slot_start_ts = slot_time.timestamp()
+            slot_end_ts = slot_start_ts + slot_duration_sec
 
-            # 1️⃣ Проверка, что желаемое окончание брони не выходит за рабочее время
-            booking_end_check = slot_time + timedelta(hours=duration_hours)
-            if booking_end_check > end_time:
-                is_free = False
+            if slot_start_ts < now_ts:
+                slot_time += timedelta(minutes=30)
+                continue
 
-            # 2️⃣ Проверка пересечения с существующими бронями
-            if is_free:
-                for b in bookings:
-                    b_start = b['booking_for'].astimezone(local_tz) if b['booking_for'].tzinfo else b['booking_for'].replace(tzinfo=local_tz)
-                    b_duration = b.get('duration_hours') or 1
-                    b_end = b_start + timedelta(hours=b_duration)
-
-                    if slot_time < b_end and booking_end_check > b_start:
-                        is_free = False
-                        break
-
-            # 3️⃣ Пропускаем прошлые слоты
-            if slot_time < now_local + timedelta(minutes=30):
-                is_free = False
-
+            is_free = all(slot_end_ts <= b_start or slot_start_ts >= b_end for b_start, b_end in busy_intervals)
             if is_free:
                 all_slots.append(slot_time.strftime("%H:%M"))
 
@@ -767,6 +773,8 @@ def get_booked_times():
     except Exception as e:
         logging.error(f"[{datetime.now()}] Ошибка /get_booked_times: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}, 500
+
+
 # =========================
 # Основные маршруты Flask
 # =========================

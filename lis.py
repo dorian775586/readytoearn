@@ -561,27 +561,29 @@ def on_webapp_data(message: types.Message):
             admin_note = ""
         # =======================================
 
-        with db_connect() as conn:
-    with conn.cursor() as cursor:
-        # Получаем все брони на выбранный стол и дату
-        cursor.execute(
-            "SELECT booking_for, duration_hours FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
-            (table_id, booking_date)
-        )
-        existing_bookings = cursor.fetchall()
+       with db_connect() as conn:
+            with conn.cursor() as cursor:
+                # Получаем все брони на выбранный стол и дату
+                cursor.execute(
+                    "SELECT booking_for, duration_hours FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
+                    (table_id, booking_date)
+                )
+                existing_bookings = cursor.fetchall()
 
-        # Проверка пересечения интервалов в Python
-        conflict = False
-        for b in existing_bookings:
-            b_start = b['booking_for'].astimezone(local_tz) if b['booking_for'].tzinfo else b['booking_for'].replace(tzinfo=local_tz)
-            b_end = b_start + timedelta(hours=b.get('duration_hours', 1))
-            if booking_start < b_end and booking_end > b_start:
-                conflict = True
-                break
+                # Проверка пересечения интервалов в Python
+                conflict = False
+                for b in existing_bookings:
+                    b_start = b['booking_for'].astimezone(local_tz) if b['booking_for'].tzinfo else b['booking_for'].replace(tzinfo=local_tz)
+                    b_end = b_start + timedelta(hours=b.get('duration_hours', 1))
+                    if booking_start < b_end and booking_end > b_start:
+                        conflict = True
+                        break
 
-        if conflict:
-            bot.send_message(user_id, f"Стол {table_id} уже забронирован на {date_str} {time_slot}. Пожалуйста, выберите другое время.")
-            return
+                if conflict:
+                    bot.send_message(user_id, f"Стол {table_id} уже забронирован на {date_str} {time_slot}. Пожалуйста, выберите другое время.")
+                    return
+
+
 
         # Вставка брони с duration_hours
         cursor.execute(

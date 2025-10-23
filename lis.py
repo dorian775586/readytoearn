@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timedelta, date, timezone
 import requests 
 import json 
-from dateutil import tz # Добавлен для корректной работы с часовыми поясами
+from dateutil import tz 
 
 from flask import Flask, request, jsonify
 from telebot import TeleBot, types
@@ -15,7 +15,7 @@ from flask_cors import CORS
 # =========================
 # ЛОГИРОВАНИЕ
 # =========================
-# Настройка логирования (используем и print, и logging для надежности)
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 print("Логирование настроено.") 
 
@@ -121,9 +121,6 @@ def init_db():
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS user_name TEXT;")
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS phone TEXT;")
                 cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS guests INT;")
-                # Это может вызвать ошибку, если столбец уже существует как TIMESTAMP без TZ.
-                # Для продакшена лучше использовать ALTER COLUMN, но для учебного проекта оставим так.
-                # cur.execute("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_for TIMESTAMP WITH TIME ZONE;") 
                 
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_conflict ON bookings (table_id, booking_for);")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_bookings_user_active ON bookings (user_id, booking_for DESC);")
@@ -155,10 +152,13 @@ bot = TeleBot(BOT_TOKEN, parse_mode="HTML", threaded=False)
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": ["https://gitrepo-drab.vercel.app"]}}, supports_credentials=True)
 
-if __name__ == "__main__":
+# 🚀 ИНИЦИАЛИЗАЦИЯ DB ПРИ ЗАПУСКЕ GUNICORN
+# Это гарантирует, что init_db будет выполнена при импорте модуля
+try:
     with app.app_context():
         init_db()
-    app.run(host="0.0.0.0", port=5000)
+except Exception as e:
+    print(f"КРИТИЧЕСКАЯ ОШИБКА: Не удалось инициализировать DB при запуске: {e}")
 
 
 # =========================
@@ -267,7 +267,6 @@ def on_my_booking(message: types.Message):
             return
         
         # Преобразование даты в локальный формат для пользователя
-        # Если booking_for - timezone aware (должен быть), to_datetime переведет его
         booking_for_dt = row['booking_for'].astimezone(local_tz) if row['booking_for'].tzinfo else row['booking_for'] 
         booking_date = booking_for_dt.strftime("%d.%m.%Y")
         
@@ -523,7 +522,6 @@ def on_webapp_data(message: types.Message):
         # ===== ВАЛИДАЦИЯ ДАННЫХ =====
         phone_pattern = r'^\+375(25|29|33|44)\d{7}$'
         if not re.match(phone_pattern, phone):
-            # В этом обработчике нельзя вернуть ответ HTTP, но можно отправить сообщение пользователю
             bot.send_message(user_id, "Ошибка: Неверный формат телефона. Укажите в формате +375 (ХХ) ХХХХХХХ.")
             return 
 
@@ -556,7 +554,6 @@ def on_webapp_data(message: types.Message):
 
         with db_connect() as conn:
             with conn.cursor() as cursor:
-                ### ИЗМЕНЕНИЕ: УДАЛЕНИЕ 3-ЧАСОВОЙ ЛОГИКИ
                 # Проверка на конфликт: ищем, есть ли уже бронь на этот стол и на это точное время.
                 cursor.execute(
                     """
@@ -641,7 +638,6 @@ def book_api():
 
         with db_connect() as conn:
             with conn.cursor() as cursor:
-                ### ИЗМЕНЕНИЕ: УДАЛЕНИЕ 3-ЧАСОВОЙ ЛОГИКИ
                 # Проверка на конфликт: ищем, есть ли уже бронь на этот стол и на это точное время.
                 cursor.execute(
                     """

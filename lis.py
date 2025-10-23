@@ -767,3 +767,60 @@ def get_booked_times():
     except Exception as e:
         logging.error(f"[{datetime.now()}] Ошибка /get_booked_times: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}, 500
+# =========================
+# Основные маршруты Flask
+# =========================
+@app.route("/")
+def index():
+    """Проверка доступности."""
+    print(f"[{datetime.now()}] Получен GET запрос на /")
+    return "Bot is running.", 200
+
+@app.route("/set_webhook_manual")
+def set_webhook_manual():
+    """Ручная установка вебхука (для инициализации)."""
+    print(f"[{datetime.now()}] Получен GET запрос на /set_webhook_manual")
+    if not RENDER_EXTERNAL_URL:
+        return jsonify({"status": "error", "message": "RENDER_EXTERNAL_URL is not set"}), 500
+    if not RENDER_EXTERNAL_URL.startswith("https://"):
+        return jsonify({"status": "error", "message": "Webhook requires HTTPS"}), 500
+
+    webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
+    try:
+        # УДАЛЕНИЕ + УСТАНОВКА
+        bot.remove_webhook()
+        print(f"[{datetime.now()}] Старый Webhook удален.")
+        ok = bot.set_webhook(url=webhook_url)
+        print(f"[{datetime.now()}] Попытка установки Webhook на {webhook_url}; Результат: {ok}")
+        if ok:
+            return jsonify({"status": "ok", "message": f"Webhook set to {webhook_url}"}), 200
+        else:
+            return jsonify({"status": "error", "message": "Failed to set webhook"}), 500
+    except Exception as e:
+        print(f"[{datetime.now()}] Ошибка при установке Webhook вручную: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    """КРИТИЧЕСКИЙ ОБРАБОТЧИК: Принимает данные от Telegram и передает их боту."""
+    print(f"[{datetime.now()}] Получен POST запрос на /webhook")
+    if request.headers.get("content-type") == "application/json":
+        json_string = request.get_data(as_text=True)
+        # !!! КРИТИЧЕСКИ ВАЖНО: Преобразование JSON в объект Update и обработка ботом
+        try:
+            update = types.Update.de_json(json_string)
+            bot.process_new_updates([update])
+            print(f"[{datetime.now()}] Webhook: Обновление успешно обработано.")
+            return "!", 200  # Обязательный ответ 200 OK для Telegram
+        except Exception as e:
+            # Логируем ошибку, но возвращаем 200, чтобы Telegram не пытался слать запрос снова.
+            print(f"[{datetime.now()}] Webhook: ОШИБКА ОБРАБОТКИ ОБНОВЛЕНИЯ: {e}")
+            return "!", 200
+    else:
+        print(f"[{datetime.now()}] Webhook: Получены не-JSON данные. Игнорирую.")
+        return "Non-JSON data received", 403
+
+# =========================
+# ЗАПУСК
+# =========================
+# В режиме Render/Gunicorn запуск не требуется (это делает Gunicorn)

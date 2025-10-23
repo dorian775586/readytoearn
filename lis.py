@@ -717,3 +717,4 @@ def get_booked_times():
     except Exception as e:
         logging.error(f"[{datetime.now()}] Ошибка /get_booked_times: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}, 500
+  

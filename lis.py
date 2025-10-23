@@ -708,21 +708,20 @@ def book_api():
 # =========================
 @app.route("/get_booked_times", methods=["GET"])
 def get_booked_times():
-    """API для получения свободных слотов с учётом реальной длительности брони."""
+    """API для получения свободных слотов с учётом желаемой длительности брони."""
     try:
         table_id = request.args.get('table')
         date_str = request.args.get('date')
+        duration_hours = int(request.args.get('duration_hours', 1))  # НОВОЕ
         if not all([table_id, date_str]):
             return {"status": "error", "message": "Не хватает данных (стол или дата)"}, 400
 
         query_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         local_tz = tz.gettz("Europe/Moscow")
 
-        # Время работы ресторана
         start_time = datetime.combine(query_date, datetime.strptime("12:00", "%H:%M").time()).replace(tzinfo=local_tz)
         end_time = datetime.combine(query_date, datetime.strptime("23:00", "%H:%M").time()).replace(tzinfo=local_tz)
 
-        # Получаем все брони на выбранный стол
         with db_connect() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
@@ -737,15 +736,24 @@ def get_booked_times():
 
         while slot_time <= end_time:
             is_free = True
-            for b in bookings:
-                b_start = b['booking_for'].astimezone(local_tz) if b['booking_for'].tzinfo else b['booking_for'].replace(tzinfo=local_tz)
-                duration = b.get('duration_hours') or 1  # если нет duration, ставим 1 час по умолчанию
-                b_end = b_start + timedelta(hours=duration)
-                if b_start <= slot_time < b_end:
-                    is_free = False
-                    break
 
-            # Пропускаем прошлые слоты (минутная подстраховка)
+            # 1️⃣ Проверка, что желаемое окончание брони не выходит за рабочее время
+            booking_end_check = slot_time + timedelta(hours=duration_hours)
+            if booking_end_check > end_time:
+                is_free = False
+
+            # 2️⃣ Проверка пересечения с существующими бронями
+            if is_free:
+                for b in bookings:
+                    b_start = b['booking_for'].astimezone(local_tz) if b['booking_for'].tzinfo else b['booking_for'].replace(tzinfo=local_tz)
+                    b_duration = b.get('duration_hours') or 1
+                    b_end = b_start + timedelta(hours=b_duration)
+
+                    if slot_time < b_end and booking_end_check > b_start:
+                        is_free = False
+                        break
+
+            # 3️⃣ Пропускаем прошлые слоты
             if slot_time < now_local + timedelta(minutes=30):
                 is_free = False
 

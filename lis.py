@@ -599,34 +599,15 @@ def on_webapp_data(message: types.Message):
     except Exception as e:
         print(f"[{datetime.now()}] (Обработчик) Ошибка обработки WebApp данных: {e}")
         bot.send_message(message.from_user.id, "Произошла ошибка при бронировании. Пожалуйста, попробуйте позже.")
-import logging
-from datetime import datetime, timedelta
-from dateutil import tz
-from flask import request, jsonify # Предполагаемые импорты
-# Необходимо, чтобы в вашем приложении были определены:
-# app (экземпляр Flask), db_connect (менеджер контекста для DB),
-# bot (экземпляр telebot), ADMIN_ID, RENDER_EXTERNAL_URL, types (из telebot)
-
-# Установим уровень логирования (если не установлено ранее)
-logging.basicConfig(level=logging.INFO)
 
 # =========================
-# BOOKING API
+# BOOKING API (обновлённый)
 # =========================
 @app.route("/book", methods=["POST"])
 def book_api():
-    """API для бронирования (используется WebApp)."""
-    log_prefix = f"[{datetime.now()}] /book:"
-    print(f"{log_prefix} Получен POST запрос")
-
+    """API для бронирования с выбором длительности (1-3 часа)."""
     try:
-        # 1. Парсинг JSON
-        data = request.get_json()
-        if not data:
-            print(f"{log_prefix} Ошибка: Тело запроса не является JSON или пусто.")
-            return {"status": "error", "message": "Некорректный формат данных (ожидается JSON)"}, 400
-
-        # 2. Извлечение и первичная проверка данных
+        data = request.json
         user_id = data.get('user_id') or 0
         user_name = data.get('user_name') or 'Неизвестный'
         phone = data.get('phone')
@@ -634,248 +615,105 @@ def book_api():
         table_id = data.get('table')
         time_slot = data.get('time')
         date_str = data.get('date')
-        # НОВОЕ ПОЛЕ: Длительность бронирования
-        duration_hours = data.get('duration_hours')
+        duration_hours = int(data.get('duration_hours', 1))  # Новое поле
 
-        required_fields = {'guests', 'table', 'time', 'date', 'duration_hours'}
-        if not all(data.get(field) for field in required_fields):
-            missing_fields = [f for f in required_fields if not data.get(f)]
-            print(f"{log_prefix} Ошибка: Не хватает данных для бронирования. Отсутствуют: {', '.join(missing_fields)}")
+        if duration_hours < 1 or duration_hours > 3:
+            return {"status": "error", "message": "Длительность брони должна быть от 1 до 3 часов."}, 400
+
+        if not all([guests, table_id, time_slot, date_str]):
             return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
 
-        # 3. Валидация количества гостей и ДЛИТЕЛЬНОСТИ
-        try:
-            guests = int(guests)
-            if not 1 <= guests <= 20:
-                return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
-            
-            duration_hours = int(duration_hours)
-            if duration_hours not in (1, 2, 3):
-                return {"status": "error", "message": "Длительность бронирования должна быть 1, 2 или 3 часа."}, 400
-        except ValueError:
-            return {"status": "error", "message": "Некорректное значение гостей или длительности."}, 400
+        guests = int(guests)
+        if guests < 1 or guests > 20:
+            return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
 
-        # 4. Обработка даты и времени (с учетом временной зоны)
-        local_tz = tz.gettz("Europe/Moscow")
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-        booking_datetime_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
-        # Применяем таймзону к наивному времени (предполагаем, что оно в Московском времени)
-        booking_datetime_aware = booking_datetime_naive.replace(tzinfo=local_tz)
+        booking_start = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
+        local_tz = tz.gettz("Europe/Moscow")
+        booking_start = booking_start.replace(tzinfo=local_tz)
+        booking_end = booking_start + timedelta(hours=duration_hours)
 
-        # 5. Проверка конфликта бронирования (используем запрошенную длительность!)
         with db_connect() as conn:
             with conn.cursor() as cursor:
-                # Рассчитываем время окончания НОВОЙ брони
-                booking_end_for_check = booking_datetime_aware + timedelta(hours=duration_hours) 
-
+                # Проверка пересечения с существующими бронями
                 cursor.execute(
-                    """
-                    SELECT duration_hours FROM bookings
-                    WHERE table_id = %s
-                    AND booking_for < %s -- Начало существующей < Конец НОВОЙ брони
-                    AND booking_for + INTERVAL '1 hour' * COALESCE(duration_hours, 3) > %s; -- Конец существующей брони (используем duration_hours или 3ч по умолчанию) > Начало НОВОЙ брони
-                    """,
-                    (table_id, booking_end_for_check, booking_datetime_aware)
+                    "SELECT booking_for, duration_hours FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
+                    (table_id, booking_date)
                 )
+                existing = cursor.fetchall()
+                conflict = False
+                for b in existing:
+                    exist_start = b['booking_for'].astimezone(local_tz) if b['booking_for'].tzinfo else b['booking_for'].replace(tzinfo=local_tz)
+                    exist_end = exist_start + timedelta(hours=b.get('duration_hours', 3))
+                    if booking_start < exist_end and booking_end > exist_start:
+                        conflict = True
+                        break
+                if conflict:
+                    return {"status": "error", "message": "Стол уже занят на выбранное время."}, 409
 
-                existing_booking = cursor.fetchone()
-                if existing_booking:
-                    print(f"{log_prefix} Ошибка: Стол {table_id} уже забронирован на {date_str} {time_slot} (конфликт {duration_hours}ч).")
-                    return {"status": "error", "message": "Этот стол уже забронирован на это время."}, 409
-
-            # 6. Вставка новой брони (ДОБАВИМ duration_hours)
-            with conn.cursor() as cursor:
+                # Вставка брони
                 cursor.execute(
                     """
                     INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for, duration_hours)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
                     """,
-                    (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(tz=local_tz), booking_datetime_aware, duration_hours)
+                    (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(tz=local_tz), booking_start, duration_hours)
                 )
                 conn.commit()
-                print(f"{log_prefix} Бронь создана (длительность: {duration_hours}ч) для user_id: {user_id}, стол: {table_id}, время: {time_slot} {date_str}")
 
-        # 7. Уведомление пользователя
-        try:
-            formatted_date = booking_date.strftime("%d.%m.%Y")
-            # Обновляем текст уведомления
-            notice_text = f"✅ Ваша бронь успешно оформлена!\n\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}\nДлительность: {duration_hours}ч"
-            admin_note = ""
-            if guests >= 10:
-                notice_text += "\n\n⚠️ При количестве гостей 10 и более необходимо согласовать предварительный заказ. Администратор свяжется с Вами."
-                admin_note = "⚠️ ВНИМАНИЕ: гостей больше 10 — согласовать заказ."
+        formatted_date = booking_date.strftime("%d.%m.%Y")
+        bot.send_message(user_id, f"✅ Ваша бронь успешно оформлена!\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}\nДлительность: {duration_hours} ч.")
 
-            # bot.send_message(user_id, notice_text) # Раскомментируйте, когда будут доступны 'bot'
-            print(f"{log_prefix} Уведомление пользователю {user_id} о брони отправлено.")
-        except Exception as e:
-            print(f"{log_prefix} Не удалось отправить уведомление пользователю {user_id}: {e}")
-
-        # 8. Уведомление администратора
-        # if ADMIN_ID: # Раскомментируйте, когда будут доступны 'ADMIN_ID'
-        try:
-            formatted_date = booking_date.strftime("%d.%m.%Y")
-            user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>' if user_id else user_name
-            message_text = (
-                f"Новая бронь:\n"
-                f"Пользователь: {user_link}\n"
-                f"Стол: {table_id}\n"
-                f"Дата: {formatted_date}\n"
-                f"Время: {time_slot}\n"
-                f"Гостей: {guests}\n"
-                f"Длительность: {duration_hours}ч\n" # Добавлено
-                f"Телефон: {phone or 'Не указан'}\n"
-                f"{admin_note}"
-            )
-            # bot.send_message(ADMIN_ID, message_text, parse_mode="HTML") # Раскомментируйте
-            print(f"{log_prefix} Уведомление админу о новой брони отправлено.")
-        except Exception as e:
-            print(f"{log_prefix} Не удалось отправить сообщение админу: {e}")
+        if ADMIN_ID:
+            user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>'
+            bot.send_message(ADMIN_ID, f"Новая бронь:\nПользователь: {user_link}\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}\nДлительность: {duration_hours} ч.\nГостей: {guests}\nТелефон: {phone or 'Не указан'}", parse_mode="HTML")
 
         return {"status": "ok", "message": "Бронь успешно создана"}, 200
 
     except Exception as e:
-        logging.error(f"{log_prefix} Критическая ошибка: {e}", exc_info=True)
-        return {"status": "error", "message": f"Внутренняя ошибка сервера: {e}"}, 500
+        logging.error(f"[{datetime.now()}] Ошибка /book: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}, 500
 
 
 # =========================
-# GET BOOKED TIMES
+# GET BOOKED TIMES (обновлённый)
 # =========================
 @app.route("/get_booked_times", methods=["GET"])
 def get_booked_times():
-    """API для получения свободных временных слотов с учётом переменной длительности брони."""
-    log_prefix = f"[{datetime.now()}] /get_booked_times:"
+    """API для получения свободных слотов с учётом реальной длительности брони."""
     try:
         table_id = request.args.get('table')
         date_str = request.args.get('date')
-
         if not all([table_id, date_str]):
-            print(f"{log_prefix} Ошибка: Не хватает данных (стол: {table_id}, дата: {date_str})")
             return {"status": "error", "message": "Не хватает данных (стол или дата)"}, 400
 
         query_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         local_tz = tz.gettz("Europe/Moscow")
+        start_time = datetime.combine(query_date, datetime.strptime("12:00", "%H:%M").time()).replace(tzinfo=local_tz)
+        end_time = datetime.combine(query_date, datetime.strptime("23:00", "%H:%M").time()).replace(tzinfo=local_tz)
 
-        # Время работы ресторана: 12:00 до 23:00 (слоты генерируются до 23:00)
-        start_time_local = datetime.combine(query_date, datetime.strptime("12:00", "%H:%M").time()).replace(tzinfo=local_tz)
-        end_time_local = datetime.combine(query_date, datetime.strptime("23:00", "%H:%M").time()).replace(tzinfo=local_tz)
-
-        # Получаем все брони на выбранный стол
         with db_connect() as conn:
             with conn.cursor() as cursor:
-                # !!! ТЕПЕРЬ ЗАПРАШИВАЕМ ДЛИТЕЛЬНОСТЬ ИЗ БАЗЫ ДАННЫХ
-                cursor.execute(
-                    "SELECT booking_for, COALESCE(duration_hours, 3) AS duration FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
-                    (table_id, query_date)
-                )
-                
-                bookings_data = []
-                for row in cursor.fetchall():
-                    # Убедимся, что время имеет Московскую временную зону
-                    b_time = row['booking_for'].astimezone(local_tz) if row['booking_for'].tzinfo else row['booking_for'].replace(tzinfo=local_tz)
-                    # Используем длительность из базы данных (по умолчанию 3 часа)
-                    duration = row['duration'] 
-                    bookings_data.append({'start': b_time, 'duration': duration})
+                cursor.execute("SELECT booking_for, duration_hours FROM bookings WHERE table_id = %s AND booking_for::date = %s;", (table_id, query_date))
+                bookings = cursor.fetchall()
 
-
-        # Генерируем все слоты с шагом 30 минут
         all_slots = []
-        slot_time = start_time_local
+        slot_time = start_time
         now_local = datetime.now(tz=local_tz)
-
-        # Генерируем слоты, пока время начала слота не превысит время закрытия ресторана (23:00)
-        while slot_time <= end_time_local:
+        while slot_time <= end_time:
             is_free = True
-
-            # 1. Пропускаем прошлые и слишком близкие слоты (30 минут буфер)
-            if slot_time < now_local + timedelta(minutes=30):
-                is_free = False
-            else:
-                # 2. Проверка конфликта с существующими бронями
-                for b_data in bookings_data:
-                    booking_start = b_data['start']
-                    # !!! ТЕПЕРЬ ДЛИТЕЛЬНОСТЬ БЕРЕТСЯ ИЗ ЗАПИСИ
-                    booking_end = booking_start + timedelta(hours=b_data['duration'])
-                    
-                    # Проверяем, попадает ли наш слот в диапазон занятости
-                    # Если (Начало брони <= Начало слота) И (Начало слота < Конец брони)
-                    if booking_start <= slot_time < booking_end:
-                        is_free = False
-                        break
-
-            if is_free:
+            for b in bookings:
+                b_start = b['booking_for'].astimezone(local_tz) if b['booking_for'].tzinfo else b['booking_for'].replace(tzinfo=local_tz)
+                b_end = b_start + timedelta(hours=b.get('duration_hours', 3))
+                if b_start <= slot_time < b_end:
+                    is_free = False
+                    break
+            if slot_time >= now_local + timedelta(minutes=30) and is_free:
                 all_slots.append(slot_time.strftime("%H:%M"))
-
             slot_time += timedelta(minutes=30)
 
-        print(f"{log_prefix} Найдено свободных слотов: {len(all_slots)}.")
         return {"status": "ok", "free_times": all_slots}, 200
 
     except Exception as e:
-        logging.error(f"{log_prefix} Критическая ошибка: {e}", exc_info=True)
-        return {"status": "error", "message": f"Внутренняя ошибка сервера: {e}"}, 500
-
-# =========================
-# Основные маршруты Flask
-# =========================
-@app.route("/")
-def index():
-    """Проверка доступности."""
-    print(f"[{datetime.now()}] Получен GET запрос на /")
-    return "Bot is running.", 200
-
-@app.route("/set_webhook_manual")
-def set_webhook_manual():
-    """Ручная установка вебхука (для инициализации)."""
-    log_prefix = f"[{datetime.now()}] /set_webhook_manual:"
-    print(f"{log_prefix} Получен GET запрос")
-    
-    # RENDER_EXTERNAL_URL: Предполагается, что это глобальная переменная, определенная в вашем окружении
-    # if not RENDER_EXTERNAL_URL:
-    #     return jsonify({"status": "error", "message": "RENDER_EXTERNAL_URL is not set"}), 500
-    # if not RENDER_EXTERNAL_URL.startswith("https://"):
-    #     return jsonify({"status": "error", "message": "Webhook requires HTTPS"}), 500
-
-    webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
-    try:
-        # УДАЛЕНИЕ + УСТАНОВКА
-        # bot.remove_webhook() # Раскомментируйте, когда будет доступен 'bot'
-        print(f"{log_prefix} Старый Webhook удален.")
-        # ok = bot.set_webhook(url=webhook_url) # Раскомментируйте
-        ok = True # Заглушка
-        print(f"{log_prefix} Попытка установки Webhook на {webhook_url}; Результат: {ok}")
-        
-        if ok:
-            return jsonify({"status": "ok", "message": f"Webhook set to {webhook_url}"}), 200
-        else:
-            return jsonify({"status": "error", "message": "Failed to set webhook"}), 500
-    except Exception as e:
-        print(f"{log_prefix} Ошибка при установке Webhook вручную: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    """КРИТИЧЕСКИЙ ОБРАБОТЧИК: Принимает данные от Telegram и передает их боту."""
-    log_prefix = f"[{datetime.now()}] /webhook:"
-    print(f"{log_prefix} Получен POST запрос")
-    
-    if request.headers.get("content-type") == "application/json":
-        json_string = request.get_data(as_text=True)
-        try:
-            # !!! КРИТИЧЕСКИ ВАЖНО: Преобразование JSON в объект Update и обработка ботом
-            # update = types.Update.de_json(json_string) # Раскомментируйте
-            # bot.process_new_updates([update]) # Раскомментируйте
-            print(f"{log_prefix} Обновление успешно обработано.")
-            return "!", 200  # Обязательный ответ 200 OK для Telegram
-        except Exception as e:
-            # Логируем ошибку, но возвращаем 200, чтобы Telegram не пытался слать запрос снова.
-            print(f"{log_prefix} ОШИБКА ОБРАБОТКИ ОБНОВЛЕНИЯ: {e}")
-            return "!", 200
-    else:
-        print(f"{log_prefix} Получены не-JSON данные. Игнорирую.")
-        return "Non-JSON data received", 403
-
-# =========================
-# ЗАПУСК
-# =========================
-# В режиме Render/Gunicorn запуск не требуется (это делает Gunicorn)
+        logging.error(f"[{datetime.now()}] Ошибка /get_booked_times: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}, 500

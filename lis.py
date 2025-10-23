@@ -629,6 +629,7 @@ def on_webapp_data(message: types.Message):
         print(f"[{datetime.now()}] Ошибка обработки WebApp данных: {e}")
         bot.send_message(message.from_user.id, "Произошла ошибка при бронировании. Пожалуйста, попробуйте позже.")
 # =========================
+# =========================
 # BOOKING API (обновлённый)
 # =========================
 @app.route("/book", methods=["POST"])
@@ -645,59 +646,78 @@ def book_api():
         date_str = data.get('date')
         duration_hours = int(data.get('duration_hours', 1))  # Длительность брони
 
-        # Проверка длительности
+        # 1. Валидация длительности
         if duration_hours < 1 or duration_hours > 3:
             return {"status": "error", "message": "Длительность брони должна быть от 1 до 3 часов."}, 400
 
-        # Проверка обязательных полей
+        # 2. Валидация полей
         if not all([guests, table_id, time_slot, date_str]):
             return {"status": "error", "message": "Не хватает данных для бронирования"}, 400
 
-        guests = int(guests)
-        if guests < 1 or guests > 20:
-            return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
+        try:
+            guests = int(guests)
+            if guests < 1 or guests > 20:
+                return {"status": "error", "message": "Количество гостей должно быть от 1 до 20."}, 400
+        except ValueError:
+             return {"status": "error", "message": "Некорректное значение количества гостей."}, 400
 
-        # Дата и время брони
+
+        # 3. Обработка времени и часового пояса
         booking_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-        booking_start = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
+        booking_start_naive = datetime.combine(booking_date, datetime.strptime(time_slot, '%H:%M').time())
         local_tz = tz.gettz("Europe/Moscow")
-        booking_start = booking_start.replace(tzinfo=local_tz)
+        booking_start = booking_start_naive.replace(tzinfo=local_tz)
         booking_end = booking_start + timedelta(hours=duration_hours)
+        formatted_date = booking_date.strftime("%d.%m.%Y")
 
+        # 4. Работа с БД (Транзакция для безопасности)
         with db_connect() as conn:
+            conn.autocommit = False # Отключаем автокоммит для транзакции
             with conn.cursor() as cursor:
+                
                 # Проверка пересечения с существующими бронями
                 cursor.execute(
-                    "SELECT booking_for, duration_hours FROM bookings WHERE table_id = %s AND booking_for::date = %s;",
+                    """
+                    SELECT booking_for, duration_hours 
+                    FROM bookings 
+                    WHERE table_id = %s AND booking_for::date = %s
+                    FOR UPDATE; -- Используем FOR UPDATE для блокировки
+                    """,
                     (table_id, booking_date)
                 )
                 existing = cursor.fetchall()
+                conflict = False
+                
                 for b in existing:
+                    # Приводим существующую бронь к локальному времени для сравнения
                     exist_start = b['booking_for'].astimezone(local_tz) if b['booking_for'].tzinfo else b['booking_for'].replace(tzinfo=local_tz)
                     exist_end = exist_start + timedelta(hours=b.get('duration_hours', 1))
+                    
+                    # Проверка на конфликт
                     if booking_start < exist_end and booking_end > exist_start:
-                        return {"status": "error", "message": "Стол уже занят на выбранное время."}, 409
+                        conflict = True
+                        break
+                
+                if conflict:
+                    conn.rollback() # Откат транзакции
+                    return {"status": "error", "message": "Стол уже занят на выбранное время."}, 409
 
-                # Вставка брони
-                duration_hours = int(duration_hours or 1)  # если вдруг None
-                    cursor.execute(
-                        """
-                        INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for, duration_hours)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
-                        """,
-                        (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(tz=local_tz), booking_start, duration_hours)
-                    )
-                    , user_name, phone, table_id, time_slot, guests, datetime.now(tz=local_tz), booking_start, duration_hours)
-                                    )
-                conn.commit()
+                # Вставка брони (если нет конфликта)
+                cursor.execute(
+                    """
+                    INSERT INTO bookings (user_id, user_name, phone, table_id, time_slot, guests, booked_at, booking_for, duration_hours)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+                    """,
+                    (user_id, user_name, phone, table_id, time_slot, guests, datetime.now(tz=local_tz), booking_start, duration_hours)
+                )
+                
+                conn.commit() # Подтверждение транзакции
 
-        formatted_date = booking_date.strftime("%d.%m.%Y")
-
-        # Уведомление пользователя
+        # 5. Уведомление пользователя
         bot.send_message(user_id,
                          f"✅ Ваша бронь успешно оформлена!\nСтол: {table_id}\nДата: {formatted_date}\nВремя: {time_slot}\nДлительность: {duration_hours} ч.")
 
-        # Уведомление администратора
+        # 6. Уведомление администратора
         if ADMIN_ID:
             user_link = f'<a href="tg://user?id={user_id}">{user_name}</a>'
             bot.send_message(
@@ -709,6 +729,7 @@ def book_api():
         return {"status": "ok", "message": "Бронь успешно создана"}, 200
 
     except Exception as e:
+        # Убедитесь, что logging импортирован (import logging)
         logging.error(f"[{datetime.now()}] Ошибка /book: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}, 500
 
